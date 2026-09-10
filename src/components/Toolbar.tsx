@@ -23,6 +23,8 @@ interface ToolbarProps {
   canRedo: boolean;
   onExport: (type: "image" | "json") => void;
   onZoom: (action: "in" | "out" | "reset") => void;
+  isBusy: boolean;
+  onError: (message: string) => void;
 }
 
 const Toolbar = ({
@@ -47,6 +49,8 @@ const Toolbar = ({
   canRedo,
   onExport,
   onZoom,
+  isBusy,
+  onError,
 }: ToolbarProps) => {
   const tools: { id: EditorTool; label: string }[] = [
     { id: "select", label: "Select" },
@@ -62,7 +66,7 @@ const Toolbar = ({
     if (!file) return;
 
     if (!file.type.startsWith("image/")) {
-      window.alert("Please select a valid image file.");
+      onError("Please select a valid image file.");
       event.target.value = "";
       return;
     }
@@ -120,7 +124,7 @@ const Toolbar = ({
             type="button"
             className="rotate-button"
             onClick={onUndo}
-            disabled={!canUndo}
+            disabled={!canUndo || isBusy}
           >
             ↶ Undo
           </button>
@@ -129,7 +133,7 @@ const Toolbar = ({
             type="button"
             className="rotate-button"
             onClick={onRedo}
-            disabled={!canRedo}
+            disabled={!canRedo || isBusy}
           >
             ↷ Redo
           </button>
@@ -148,7 +152,7 @@ const Toolbar = ({
                 activeTool === tool.id ? "active" : ""
               }`}
               onClick={() => onToolChange(tool.id)}
-              disabled={!hasImage && tool.id !== "select"}
+              disabled={isBusy || (!hasImage && tool.id !== "select")}
             >
               {tool.label}
             </button>
@@ -165,6 +169,7 @@ const Toolbar = ({
               type="button"
               className="rotate-button"
               onClick={() => onRotate("left")}
+              disabled={isBusy}
             >
               ↶ Rotate Left
             </button>
@@ -173,6 +178,7 @@ const Toolbar = ({
               type="button"
               className="rotate-button"
               onClick={() => onRotate("right")}
+              disabled={isBusy}
             >
               ↷ Rotate Right
             </button>
@@ -193,6 +199,7 @@ const Toolbar = ({
                   type="color"
                   value={brushColor}
                   onChange={(event) => onBrushColorChange(event.target.value)}
+                  disabled={isBusy}
                   aria-label="Annotation color"
                 />
 
@@ -210,6 +217,7 @@ const Toolbar = ({
                     type="text"
                     value={textValue}
                     onChange={handleTextChange}
+                    disabled={isBusy}
                     placeholder="Enter text"
                   />
                 </label>
@@ -228,6 +236,7 @@ const Toolbar = ({
                     step="1"
                     value={textFontSize}
                     onChange={handleTextFontSizeChange}
+                    disabled={isBusy}
                   />
                 </label>
               </>
@@ -248,6 +257,7 @@ const Toolbar = ({
                   step="1"
                   value={brushWidth}
                   onChange={handleBrushWidthChange}
+                  disabled={isBusy}
                 />
               </label>
             )}
@@ -264,6 +274,7 @@ const Toolbar = ({
               type="button"
               className="rotate-button"
               onClick={() => onZoom("out")}
+              disabled={isBusy}
             >
               − Zoom Out
             </button>
@@ -272,6 +283,7 @@ const Toolbar = ({
               type="button"
               className="rotate-button"
               onClick={() => onZoom("reset")}
+              disabled={isBusy}
             >
               100% Reset
             </button>
@@ -280,6 +292,7 @@ const Toolbar = ({
               type="button"
               className="rotate-button"
               onClick={() => onZoom("in")}
+              disabled={isBusy}
             >
               + Zoom In
             </button>
@@ -296,6 +309,7 @@ const Toolbar = ({
               type="button"
               className="rotate-button"
               onClick={() => onExport("image")}
+              disabled={isBusy}
             >
               Export Image
             </button>
@@ -304,6 +318,7 @@ const Toolbar = ({
               type="button"
               className="rotate-button"
               onClick={() => onExport("json")}
+              disabled={isBusy}
             >
               Export JSON
             </button>
@@ -316,7 +331,7 @@ const Toolbar = ({
           type="button"
           className="clear-button"
           onClick={onClear}
-          disabled={!hasImage}
+          disabled={!hasImage || isBusy}
         >
           Clear Canvas
         </button>

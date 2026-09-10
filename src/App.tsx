@@ -72,7 +72,14 @@ function App() {
     action: "reset",
   });
 
+  const [isBusy, setIsBusy] = useState(false);
+  const [busyMessage, setBusyMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
   const handleImageUpload = (file: File) => {
+    setErrorMessage(null);
+    setBusyMessage("Loading image…");
+    setIsBusy(true);
     setImageFile(file);
     setActiveTool("select");
     setIsCropping(false);
@@ -103,6 +110,9 @@ function App() {
   };
 
   const handleImageLoaded = useCallback((metadata: ImageMetadata) => {
+    setIsBusy(false);
+    setBusyMessage("");
+    setErrorMessage(null);
     setEditorState((currentState) => ({
       ...currentState,
       image: metadata,
@@ -110,8 +120,22 @@ function App() {
     setSelectedAnnotation(null);
   }, []);
 
+  const handleEditorLoadingChange = useCallback(
+    (loading: boolean, message = "") => {
+      setIsBusy(loading);
+      setBusyMessage(message);
+    },
+    [],
+  );
+
+  const handleEditorError = useCallback((message: string) => {
+    setIsBusy(false);
+    setBusyMessage("");
+    setErrorMessage(message);
+  }, []);
+
   const handleRotate = (direction: "left" | "right") => {
-    if (!imageFile || isCropping) {
+    if (!imageFile || isCropping || isBusy) {
       return;
     }
 
@@ -243,10 +267,11 @@ function App() {
   };
 
   const handleExport = (type: "image" | "json") => {
-    if (!imageFile) {
+    if (!imageFile || isBusy) {
       return;
     }
 
+    setErrorMessage(null);
     setExportRequest((currentRequest) => ({
       id: currentRequest.id + 1,
       type,
@@ -279,7 +304,7 @@ function App() {
   };
 
   const handleZoom = (action: ZoomRequest["action"]) => {
-    if (!imageFile) {
+    if (!imageFile || isBusy) {
       return;
     }
 
@@ -296,6 +321,7 @@ function App() {
 
   return (
     <div className="app">
+      <style>{`@keyframes image-editor-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
       <header className="app-header">
         <div>
           <h1>Image Editor</h1>
@@ -333,6 +359,8 @@ function App() {
           canRedo={canRedo}
           onExport={handleExport}
           onZoom={handleZoom}
+          isBusy={isBusy}
+          onError={handleEditorError}
         />
 
         <section className="workspace">
@@ -353,6 +381,8 @@ function App() {
             onCropApplied={handleCropApplied}
             onCropModeChange={handleCropModeChange}
             onAnnotationSelected={handleAnnotationSelected}
+            onLoadingChange={handleEditorLoadingChange}
+            onError={handleEditorError}
           />
 
           {!imageFile && (
@@ -361,6 +391,79 @@ function App() {
                 <h2>Start editing an image</h2>
                 <p>Upload an image from your computer to begin.</p>
               </div>
+            </div>
+          )}
+
+          {errorMessage && (
+            <div
+              className="editor-error"
+              role="alert"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "12px",
+                padding: "12px 14px",
+                margin: "12px 0",
+                border: "1px solid #fecaca",
+                borderRadius: "10px",
+                background: "#fef2f2",
+                color: "#991b1b",
+              }}
+            >
+              <div
+                style={{ display: "flex", flexDirection: "column", gap: "2px" }}
+              >
+                <strong>Something went wrong</strong>
+                <span>{errorMessage}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setErrorMessage(null)}
+                aria-label="Dismiss error"
+                style={{
+                  border: 0,
+                  background: "transparent",
+                  fontSize: "22px",
+                  cursor: "pointer",
+                  color: "inherit",
+                }}
+              >
+                ×
+              </button>
+            </div>
+          )}
+
+          {isBusy && (
+            <div
+              className="editor-loading"
+              role="status"
+              aria-live="polite"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "10px",
+                padding: "14px",
+                margin: "12px 0",
+                border: "1px solid #e5e7eb",
+                borderRadius: "10px",
+                background: "#ffffff",
+                color: "#374151",
+              }}
+            >
+              <div
+                className="loading-spinner"
+                style={{
+                  width: "18px",
+                  height: "18px",
+                  border: "3px solid #e5e7eb",
+                  borderTopColor: "#111827",
+                  borderRadius: "50%",
+                  animation: "image-editor-spin 0.8s linear infinite",
+                }}
+              />
+              <span>{busyMessage || "Working…"}</span>
             </div>
           )}
 

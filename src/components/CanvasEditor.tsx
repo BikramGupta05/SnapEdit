@@ -40,6 +40,10 @@ interface CanvasEditorProps {
 
   onAnnotationSelected: (annotation: SelectedAnnotation | null) => void;
 
+  onLoadingChange: (loading: boolean, message?: string) => void;
+
+  onError: (message: string) => void;
+
   historyRequest: {
     id: number;
     direction: "undo" | "redo";
@@ -74,6 +78,8 @@ const CanvasEditor = ({
   onCropApplied,
   onCropModeChange,
   onAnnotationSelected,
+  onLoadingChange,
+  onError,
 
   historyRequest,
   onHistoryStateChange,
@@ -298,6 +304,8 @@ const CanvasEditor = ({
     fileUrlRef.current = objectUrl;
 
     const loadImage = async () => {
+      onLoadingChange(true, "Loading image…");
+
       try {
         const canvas = fabricCanvasRef.current;
 
@@ -375,6 +383,11 @@ const CanvasEditor = ({
         emitHistoryState();
       } catch (error) {
         console.error("Failed to load image:", error);
+        onError(
+          "The image could not be loaded. Please try another image file.",
+        );
+      } finally {
+        onLoadingChange(false);
       }
     };
 
@@ -394,6 +407,8 @@ const CanvasEditor = ({
     fabricCanvasRef,
     onImageLoaded,
     onAnnotationSelected,
+    onLoadingChange,
+    onError,
   ]);
 
   /*
@@ -1941,6 +1956,7 @@ const CanvasEditor = ({
       }
 
       isApplyingCropRef.current = true;
+      onLoadingChange(true, "Applying crop…");
       isApplyingOperationRef.current = true;
 
       /*
@@ -2212,6 +2228,9 @@ const CanvasEditor = ({
         onAnnotationSelected(null);
       } catch (error) {
         console.error("Failed to crop image:", error);
+        onError(
+          "The crop could not be applied. Please try a different crop area.",
+        );
       } finally {
         /*
          * Restore the exact zoom/pan state the user had before
@@ -2223,6 +2242,7 @@ const CanvasEditor = ({
 
         isApplyingCropRef.current = false;
         isApplyingOperationRef.current = false;
+        onLoadingChange(false);
 
         if (!isApplyingCropRef.current) {
           emitHistoryState();
@@ -2242,6 +2262,8 @@ const CanvasEditor = ({
     fabricCanvasRef,
     onCropApplied,
     onAnnotationSelected,
+    onLoadingChange,
+    onError,
   ]);
 
   /*
@@ -2262,6 +2284,11 @@ const CanvasEditor = ({
     }
 
     const exportCanvas = () => {
+      onLoadingChange(
+        true,
+        exportRequest.type === "image" ? "Exporting image…" : "Exporting JSON…",
+      );
+
       const cropRect = cropRectRef.current;
       const activeObject = canvas.getActiveObject();
       const previousCropVisibility = cropRect?.visible ?? false;
@@ -2362,7 +2389,15 @@ const CanvasEditor = ({
         link.download = `${baseName}-annotations.json`;
         link.click();
         URL.revokeObjectURL(url);
+      } catch (error) {
+        console.error("Failed to export:", error);
+        onError(
+          exportRequest.type === "image"
+            ? "The edited image could not be exported."
+            : "The JSON export could not be created.",
+        );
       } finally {
+        onLoadingChange(false);
         if (cropRect) {
           cropRect.set({
             visible: previousCropVisibility,
@@ -2378,7 +2413,15 @@ const CanvasEditor = ({
     };
 
     exportCanvas();
-  }, [exportRequest, imageFile, canvasWidth, canvasHeight, fabricCanvasRef]);
+  }, [
+    exportRequest,
+    imageFile,
+    canvasWidth,
+    canvasHeight,
+    fabricCanvasRef,
+    onLoadingChange,
+    onError,
+  ]);
 
   /*
    * ============================================================
