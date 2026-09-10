@@ -22,6 +22,7 @@ interface ToolbarProps {
   canUndo: boolean;
   canRedo: boolean;
   onExport: (type: "image" | "json") => void;
+  onZoom: (action: "in" | "out" | "reset") => void;
 }
 
 const Toolbar = ({
@@ -45,6 +46,7 @@ const Toolbar = ({
   canUndo,
   canRedo,
   onExport,
+  onZoom,
 }: ToolbarProps) => {
   const tools: { id: EditorTool; label: string }[] = [
     { id: "select", label: "Select" },
@@ -249,6 +251,38 @@ const Toolbar = ({
                 />
               </label>
             )}
+          </div>
+        </div>
+      )}
+
+      {hasImage && (
+        <div className="toolbar-section">
+          <h2>Zoom</h2>
+
+          <div className="rotation-actions">
+            <button
+              type="button"
+              className="rotate-button"
+              onClick={() => onZoom("out")}
+            >
+              − Zoom Out
+            </button>
+
+            <button
+              type="button"
+              className="rotate-button"
+              onClick={() => onZoom("reset")}
+            >
+              100% Reset
+            </button>
+
+            <button
+              type="button"
+              className="rotate-button"
+              onClick={() => onZoom("in")}
+            >
+              + Zoom In
+            </button>
           </div>
         </div>
       )}

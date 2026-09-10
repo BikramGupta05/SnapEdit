@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Circle, FabricImage, IText, PencilBrush, Rect } from "fabric";
+import { Circle, FabricImage, IText, PencilBrush, Point, Rect } from "fabric";
 
 import { useFabricCanvas } from "../hooks/useFabricCanvas";
 
@@ -23,6 +23,11 @@ interface CanvasEditorProps {
   rotationRequest: {
     id: number;
     direction: "left" | "right";
+  };
+
+  zoomRequest: {
+    id: number;
+    action: "in" | "out" | "reset";
   };
 
   onImageLoaded: (metadata: ImageMetadata) => void;
@@ -60,6 +65,8 @@ const CanvasEditor = ({
   textValue,
 
   rotationRequest,
+
+  zoomRequest,
 
   onImageLoaded,
   onImageRotated,
@@ -106,6 +113,8 @@ const CanvasEditor = ({
   const historyTimerRef = useRef<number | null>(null);
 
   const lastHistoryRequestRef = useRef(0);
+
+  const zoomPointRef = useRef(new Point(canvasWidth / 2, canvasHeight / 2));
 
   const emitHistoryState = (force = false) => {
     const canvas = fabricCanvasRef.current;
@@ -300,6 +309,8 @@ const CanvasEditor = ({
           crossOrigin: "anonymous",
         });
 
+        canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+        canvas.setZoom(1);
         canvas.clear();
 
         canvas.backgroundColor = "#ffffff";
@@ -672,6 +683,118 @@ const CanvasEditor = ({
     onImageRotated,
     onAnnotationSelected,
   ]);
+
+  /*
+   * ============================================================
+   * CURSOR-BASED ZOOM
+   * ============================================================
+   *
+   * The zoom buttons use the last position of the mouse over the
+   * canvas. This means the user can move the cursor to the top,
+   * bottom, left, right, or any specific area and then click Zoom In
+   * or Zoom Out to zoom around that exact point.
+   *
+   * Ctrl/Cmd + mouse wheel also zooms directly around the cursor.
+   * Zoom changes only the Fabric viewport and therefore do not affect
+   * the actual image, annotations, or Undo/Redo history.
+   */
+
+  useEffect(() => {
+    const canvas = fabricCanvasRef.current;
+
+    if (!canvas) {
+      return;
+    }
+
+    zoomPointRef.current = new Point(canvasWidth / 2, canvasHeight / 2);
+
+    const handleMouseMove = (event: any) => {
+      const pointer = new Point(event.e.offsetX, event.e.offsetY);
+
+      zoomPointRef.current = new Point(
+        Math.max(0, Math.min(canvasWidth, pointer.x)),
+        Math.max(0, Math.min(canvasHeight, pointer.y)),
+      );
+    };
+
+    canvas.on("mouse:move", handleMouseMove);
+
+    return () => {
+      canvas.off("mouse:move", handleMouseMove);
+    };
+  }, [canvasWidth, canvasHeight, fabricCanvasRef]);
+
+  useEffect(() => {
+    if (zoomRequest.id === 0) {
+      return;
+    }
+
+    const canvas = fabricCanvasRef.current;
+
+    if (!canvas) {
+      return;
+    }
+
+    const currentZoom = canvas.getZoom();
+    let nextZoom = currentZoom;
+
+    if (zoomRequest.action === "in") {
+      nextZoom = Math.min(3, currentZoom + 0.25);
+    } else if (zoomRequest.action === "out") {
+      nextZoom = Math.max(0.5, currentZoom - 0.25);
+    } else {
+      nextZoom = 1;
+    }
+
+    const zoomPoint =
+      zoomRequest.action === "reset"
+        ? new Point(canvasWidth / 2, canvasHeight / 2)
+        : zoomPointRef.current;
+
+    canvas.zoomToPoint(zoomPoint, nextZoom);
+    canvas.requestRenderAll();
+  }, [zoomRequest, canvasWidth, canvasHeight, fabricCanvasRef]);
+
+  useEffect(() => {
+    const canvas = fabricCanvasRef.current;
+
+    if (!canvas) {
+      return;
+    }
+
+    const handleMouseWheel = (event: any) => {
+      const nativeEvent = event.e as WheelEvent;
+
+      // Keep normal scrolling available. Ctrl/Cmd + wheel performs zoom.
+      if (!nativeEvent.ctrlKey && !nativeEvent.metaKey) {
+        return;
+      }
+
+      nativeEvent.preventDefault();
+
+      const pointer = new Point(nativeEvent.offsetX, nativeEvent.offsetY);
+
+      const zoomPoint = new Point(
+        Math.max(0, Math.min(canvasWidth, pointer.x)),
+        Math.max(0, Math.min(canvasHeight, pointer.y)),
+      );
+
+      zoomPointRef.current = zoomPoint;
+
+      const currentZoom = canvas.getZoom();
+      const zoomFactor = nativeEvent.deltaY < 0 ? 1.1 : 0.9;
+      const nextZoom = Math.max(0.5, Math.min(3, currentZoom * zoomFactor));
+
+      canvas.zoomToPoint(zoomPoint, nextZoom);
+      canvas.requestRenderAll();
+    };
+
+    canvas.on("mouse:wheel", handleMouseWheel);
+
+    return () => {
+      canvas.off("mouse:wheel", handleMouseWheel);
+    };
+  }, [canvasWidth, canvasHeight, fabricCanvasRef]);
 
   /*
    * ============================================================
@@ -1821,6 +1944,33 @@ const CanvasEditor = ({
       isApplyingOperationRef.current = true;
 
       /*
+       * Zoom changes Fabric's viewport transform. Crop coordinates,
+       * however, are calculated in the editor's scene coordinates.
+       * Temporarily remove the viewport transform while calculating
+       * and rendering the crop so zoom cannot change the crop area.
+       * The original zoom/pan is restored after the crop finishes.
+       */
+      const previousViewportTransform: [
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+      ] = canvas.viewportTransform
+        ? [
+            canvas.viewportTransform[0],
+            canvas.viewportTransform[1],
+            canvas.viewportTransform[2],
+            canvas.viewportTransform[3],
+            canvas.viewportTransform[4],
+            canvas.viewportTransform[5],
+          ]
+        : [1, 0, 0, 1, 0, 0];
+
+      canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+
+      /*
        * Save the objects before changing the canvas.
        */
       const annotations = getCompositionObjects(canvas);
@@ -2063,6 +2213,14 @@ const CanvasEditor = ({
       } catch (error) {
         console.error("Failed to crop image:", error);
       } finally {
+        /*
+         * Restore the exact zoom/pan state the user had before
+         * cropping. This keeps zoom purely a viewport operation
+         * while ensuring the crop itself is calculated correctly.
+         */
+        canvas.setViewportTransform(previousViewportTransform);
+        canvas.requestRenderAll();
+
         isApplyingCropRef.current = false;
         isApplyingOperationRef.current = false;
 

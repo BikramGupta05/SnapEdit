@@ -24,6 +24,11 @@ interface ExportRequest {
   type: "image" | "json";
 }
 
+interface ZoomRequest {
+  id: number;
+  action: "in" | "out" | "reset";
+}
+
 function App() {
   const [activeTool, setActiveTool] = useState<EditorTool>("select");
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -62,6 +67,11 @@ function App() {
     type: "image",
   });
 
+  const [zoomRequest, setZoomRequest] = useState<ZoomRequest>({
+    id: 0,
+    action: "reset",
+  });
+
   const handleImageUpload = (file: File) => {
     setImageFile(file);
     setActiveTool("select");
@@ -85,6 +95,10 @@ function App() {
     setExportRequest({
       id: 0,
       type: "image",
+    });
+    setZoomRequest({
+      id: 0,
+      action: "reset",
     });
   };
 
@@ -258,6 +272,21 @@ function App() {
       id: 0,
       type: "image",
     });
+    setZoomRequest((currentRequest) => ({
+      id: currentRequest.id + 1,
+      action: "reset",
+    }));
+  };
+
+  const handleZoom = (action: ZoomRequest["action"]) => {
+    if (!imageFile) {
+      return;
+    }
+
+    setZoomRequest((currentRequest) => ({
+      id: currentRequest.id + 1,
+      action,
+    }));
   };
 
   const selectedType: AnnotationType | null = selectedAnnotation?.type ?? null;
@@ -303,6 +332,7 @@ function App() {
           canUndo={canUndo}
           canRedo={canRedo}
           onExport={handleExport}
+          onZoom={handleZoom}
         />
 
         <section className="workspace">
@@ -314,6 +344,7 @@ function App() {
             textFontSize={textFontSize}
             textValue={textValue}
             rotationRequest={rotationRequest}
+            zoomRequest={zoomRequest}
             historyRequest={historyRequest}
             onHistoryStateChange={handleHistoryStateChange}
             exportRequest={exportRequest}
