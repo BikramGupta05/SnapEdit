@@ -42,6 +42,11 @@ interface CanvasEditorProps {
   };
 
   onHistoryStateChange: (snapshot: string) => void;
+
+  exportRequest: {
+    id: number;
+    type: "image" | "json";
+  };
 }
 
 const CanvasEditor = ({
@@ -65,6 +70,8 @@ const CanvasEditor = ({
 
   historyRequest,
   onHistoryStateChange,
+
+  exportRequest,
 }: CanvasEditorProps) => {
   const { canvasElementRef, fabricCanvasRef, canvasWidth, canvasHeight } =
     useFabricCanvas();
@@ -2078,6 +2085,142 @@ const CanvasEditor = ({
     onCropApplied,
     onAnnotationSelected,
   ]);
+
+  /*
+   * ============================================================
+   * EXPORT
+   * ============================================================
+   */
+
+  useEffect(() => {
+    if (exportRequest.id === 0) {
+      return;
+    }
+
+    const canvas = fabricCanvasRef.current;
+
+    if (!canvas) {
+      return;
+    }
+
+    const exportCanvas = () => {
+      const cropRect = cropRectRef.current;
+      const activeObject = canvas.getActiveObject();
+      const previousCropVisibility = cropRect?.visible ?? false;
+
+      try {
+        canvas.discardActiveObject();
+
+        if (cropRect) {
+          cropRect.set({ visible: false });
+        }
+
+        canvas.requestRenderAll();
+
+        if (exportRequest.type === "image") {
+          const dataUrl = canvas.toDataURL({
+            format: "png",
+            multiplier: 1,
+          });
+
+          const link = document.createElement("a");
+          const baseName = imageFile?.name
+            ? imageFile.name.replace(/\.[^/.]+$/, "")
+            : "edited-image";
+
+          link.href = dataUrl;
+          link.download = `${baseName}-edited.png`;
+          link.click();
+          return;
+        }
+
+        const allAnnotations = canvas
+          .getObjects()
+          .filter((object: any) => isAnnotation(object));
+
+        const annotationData = allAnnotations.map((object: any) =>
+          object.toObject(["annotationType", "isTemporaryShape"]),
+        );
+
+        const drawingData = allAnnotations
+          .filter((object: any) => object.get("annotationType") === "drawing")
+          .map((object: any) =>
+            object.toObject(["annotationType", "isTemporaryShape"]),
+          );
+
+        const shapeData = allAnnotations
+          .filter((object: any) => {
+            const type = object.get("annotationType");
+            return type === "rectangle" || type === "circle";
+          })
+          .map((object: any) =>
+            object.toObject(["annotationType", "isTemporaryShape"]),
+          );
+
+        const textData = allAnnotations
+          .filter((object: any) => object.get("annotationType") === "text")
+          .map((object: any) =>
+            object.toObject(["annotationType", "isTemporaryShape"]),
+          );
+
+        const exportData = {
+          editorVersion: 1,
+          exportedAt: new Date().toISOString(),
+          sourceImage: imageFile
+            ? {
+                name: imageFile.name,
+                type: imageFile.type,
+                size: imageFile.size,
+              }
+            : null,
+          imageMetadata: imageRef.current
+            ? {
+                originalWidth: imageRef.current.get("width") || 0,
+                originalHeight: imageRef.current.get("height") || 0,
+                rotation: rotationRef.current,
+                scaleX: imageRef.current.scaleX || 1,
+                scaleY: imageRef.current.scaleY || 1,
+                canvasWidth,
+                canvasHeight,
+              }
+            : null,
+          annotations: annotationData,
+          drawingData,
+          shapeData,
+          textData,
+        };
+
+        const blob = new Blob([JSON.stringify(exportData, null, 2)], {
+          type: "application/json",
+        });
+
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        const baseName = imageFile?.name
+          ? imageFile.name.replace(/\.[^/.]+$/, "")
+          : "edited-image";
+
+        link.href = url;
+        link.download = `${baseName}-annotations.json`;
+        link.click();
+        URL.revokeObjectURL(url);
+      } finally {
+        if (cropRect) {
+          cropRect.set({
+            visible: previousCropVisibility,
+          });
+        }
+
+        if (activeObject) {
+          canvas.setActiveObject(activeObject);
+        }
+
+        canvas.requestRenderAll();
+      }
+    };
+
+    exportCanvas();
+  }, [exportRequest, imageFile, canvasWidth, canvasHeight, fabricCanvasRef]);
 
   /*
    * ============================================================

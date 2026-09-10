@@ -19,6 +19,11 @@ interface HistoryRequest {
   snapshot: string;
 }
 
+interface ExportRequest {
+  id: number;
+  type: "image" | "json";
+}
+
 function App() {
   const [activeTool, setActiveTool] = useState<EditorTool>("select");
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -52,6 +57,11 @@ function App() {
   const [historyPast, setHistoryPast] = useState<string[]>([]);
   const [historyFuture, setHistoryFuture] = useState<string[]>([]);
 
+  const [exportRequest, setExportRequest] = useState<ExportRequest>({
+    id: 0,
+    type: "image",
+  });
+
   const handleImageUpload = (file: File) => {
     setImageFile(file);
     setActiveTool("select");
@@ -71,6 +81,10 @@ function App() {
       id: 0,
       direction: "undo",
       snapshot: "",
+    });
+    setExportRequest({
+      id: 0,
+      type: "image",
     });
   };
 
@@ -214,6 +228,17 @@ function App() {
     void currentSnapshot;
   };
 
+  const handleExport = (type: "image" | "json") => {
+    if (!imageFile) {
+      return;
+    }
+
+    setExportRequest((currentRequest) => ({
+      id: currentRequest.id + 1,
+      type,
+    }));
+  };
+
   const handleClearCanvas = () => {
     setImageFile(null);
     setIsCropping(false);
@@ -228,6 +253,10 @@ function App() {
       id: 0,
       direction: "undo",
       snapshot: "",
+    });
+    setExportRequest({
+      id: 0,
+      type: "image",
     });
   };
 
@@ -273,6 +302,7 @@ function App() {
           onRedo={handleRedo}
           canUndo={canUndo}
           canRedo={canRedo}
+          onExport={handleExport}
         />
 
         <section className="workspace">
@@ -286,6 +316,7 @@ function App() {
             rotationRequest={rotationRequest}
             historyRequest={historyRequest}
             onHistoryStateChange={handleHistoryStateChange}
+            exportRequest={exportRequest}
             onImageLoaded={handleImageLoaded}
             onImageRotated={handleImageRotated}
             onCropApplied={handleCropApplied}
