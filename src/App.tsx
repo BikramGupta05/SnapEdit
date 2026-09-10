@@ -1,6 +1,8 @@
 import { useCallback, useState } from "react";
+
 import CanvasEditor from "./components/CanvasEditor";
 import Toolbar from "./components/Toolbar";
+
 import type {
   AnnotationType,
   EditorState,
@@ -8,6 +10,7 @@ import type {
   ImageMetadata,
   SelectedAnnotation,
 } from "./types/editor";
+
 import "./App.css";
 
 function App() {
@@ -33,6 +36,26 @@ function App() {
 
   const [isCropping, setIsCropping] = useState(false);
 
+  /*
+   * Rotation request.
+   *
+   * The number changes every time
+   * the user requests a rotation.
+   *
+   * CanvasEditor watches this value
+   * and performs the actual rotation.
+   */
+  const [rotationRequest, setRotationRequest] = useState({
+    id: 0,
+    direction: "right" as "left" | "right",
+  });
+
+  /*
+   * ============================================================
+   * IMAGE UPLOAD
+   * ============================================================
+   */
+
   const handleImageUpload = (file: File) => {
     setImageFile(file);
 
@@ -44,11 +67,22 @@ function App() {
 
     setTextValue("");
 
+    setRotationRequest({
+      id: 0,
+      direction: "right",
+    });
+
     setEditorState({
       tool: "select",
       image: null,
     });
   };
+
+  /*
+   * ============================================================
+   * IMAGE LOADED
+   * ============================================================
+   */
 
   const handleImageLoaded = useCallback((metadata: ImageMetadata) => {
     setEditorState((currentState) => ({
@@ -58,6 +92,61 @@ function App() {
 
     setSelectedAnnotation(null);
   }, []);
+
+  /*
+   * ============================================================
+   * ROTATION
+   * ============================================================
+   */
+
+  const handleRotate = (direction: "left" | "right") => {
+    if (!imageFile) {
+      return;
+    }
+
+    setRotationRequest((currentRequest) => ({
+      id: currentRequest.id + 1,
+
+      direction,
+    }));
+  };
+
+  /*
+   * ============================================================
+   * ROTATION METADATA
+   * ============================================================
+   */
+
+  const handleImageRotated = useCallback(
+    (rotation: number, scaleX: number, scaleY: number) => {
+      setEditorState((currentState) => {
+        if (!currentState.image) {
+          return currentState;
+        }
+
+        return {
+          ...currentState,
+
+          image: {
+            ...currentState.image,
+
+            rotation,
+
+            scaleX,
+
+            scaleY,
+          },
+        };
+      });
+    },
+    [],
+  );
+
+  /*
+   * ============================================================
+   * CROP
+   * ============================================================
+   */
 
   const handleCropApplied = useCallback((metadata: ImageMetadata) => {
     setEditorState((currentState) => ({
@@ -79,6 +168,12 @@ function App() {
     }
   }, []);
 
+  /*
+   * ============================================================
+   * TOOL CHANGE
+   * ============================================================
+   */
+
   const handleToolChange = (tool: EditorTool) => {
     setActiveTool(tool);
 
@@ -91,6 +186,12 @@ function App() {
       tool,
     }));
   };
+
+  /*
+   * ============================================================
+   * ANNOTATION SELECTION
+   * ============================================================
+   */
 
   const handleAnnotationSelected = useCallback(
     (annotation: SelectedAnnotation | null) => {
@@ -111,9 +212,21 @@ function App() {
     [],
   );
 
+  /*
+   * ============================================================
+   * TEXT VALUE
+   * ============================================================
+   */
+
   const handleTextValueChange = (value: string) => {
     setTextValue(value);
   };
+
+  /*
+   * ============================================================
+   * CLEAR
+   * ============================================================
+   */
 
   const handleClearCanvas = () => {
     setImageFile(null);
@@ -126,6 +239,11 @@ function App() {
 
     setTextValue("");
 
+    setRotationRequest({
+      id: 0,
+      direction: "right",
+    });
+
     setEditorState({
       tool: "select",
       image: null,
@@ -136,6 +254,10 @@ function App() {
 
   return (
     <div className="app">
+      {/* ======================================================
+          HEADER
+          ====================================================== */}
+
       <header className="app-header">
         <div>
           <h1>Image Editor</h1>
@@ -152,12 +274,17 @@ function App() {
         )}
       </header>
 
+      {/* ======================================================
+          MAIN EDITOR
+          ====================================================== */}
+
       <main className="editor-layout">
         <Toolbar
           activeTool={activeTool}
           onToolChange={handleToolChange}
           onImageUpload={handleImageUpload}
           onClear={handleClearCanvas}
+          onRotate={handleRotate}
           hasImage={Boolean(imageFile)}
           brushColor={brushColor}
           brushWidth={brushWidth}
@@ -178,7 +305,9 @@ function App() {
             brushWidth={brushWidth}
             textFontSize={textFontSize}
             textValue={textValue}
+            rotationRequest={rotationRequest}
             onImageLoaded={handleImageLoaded}
+            onImageRotated={handleImageRotated}
             onCropApplied={handleCropApplied}
             onCropModeChange={handleCropModeChange}
             onAnnotationSelected={handleAnnotationSelected}
@@ -200,6 +329,12 @@ function App() {
                 {editorState.image.originalWidth} ×{" "}
                 {editorState.image.originalHeight} px
               </span>
+
+              {editorState.image.rotation !== 0 && (
+                <span className="rotation-status">
+                  Rotation: {editorState.image.rotation}°
+                </span>
+              )}
 
               {isCropping && <span className="crop-status">Crop mode</span>}
             </div>

@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import { Circle, FabricImage, IText, PencilBrush, Rect } from "fabric";
+
 import { useFabricCanvas } from "../hooks/useFabricCanvas";
+
 import type {
   EditorTool,
   ImageMetadata,
@@ -18,7 +20,14 @@ interface CanvasEditorProps {
   textFontSize: number;
   textValue: string;
 
+  rotationRequest: {
+    id: number;
+    direction: "left" | "right";
+  };
+
   onImageLoaded: (metadata: ImageMetadata) => void;
+
+  onImageRotated: (rotation: number, scaleX: number, scaleY: number) => void;
 
   onCropApplied: (metadata: ImageMetadata) => void;
 
@@ -37,7 +46,11 @@ const CanvasEditor = ({
   textFontSize,
   textValue,
 
+  rotationRequest,
+
   onImageLoaded,
+  onImageRotated,
+
   onCropApplied,
   onCropModeChange,
   onAnnotationSelected,
@@ -62,15 +75,115 @@ const CanvasEditor = ({
 
   const textValueRef = useRef(textValue);
 
+  const lastRotationRequestRef = useRef(0);
+
+  const rotationRef = useRef(0);
+
+  const baseImageScaleRef = useRef(1);
+
+  /*
+   * ============================================================
+   * KEEP LATEST TEXT VALUE
+   * ============================================================
+   */
+
   useEffect(() => {
     textValueRef.current = textValue;
   }, [textValue]);
 
   /*
    * ============================================================
+   * HELPERS
+   * ============================================================
+   */
+
+  const isAnnotation = (object: any) => {
+    const type = object.get("annotationType");
+
+    return (
+      type === "drawing" ||
+      type === "rectangle" ||
+      type === "circle" ||
+      type === "text"
+    );
+  };
+
+  const getCompositionObjects = (canvas: any) => {
+    return canvas
+      .getObjects()
+      .filter(
+        (object: any) =>
+          object !== imageRef.current &&
+          object !== cropRectRef.current &&
+          isAnnotation(object),
+      );
+  };
+
+  /*
+   * Apply a fixed crop boundary to an annotation.
+   *
+   * The crop boundary is absolute to the canvas so moving an
+   * annotation cannot make pixels outside the crop visible.
+   * It is transformed together with the composition during
+   * rotation. This keeps drawings/text editable while ensuring
+   * that their portions outside the cropped image are hidden.
+   */
+  const setAnnotationCropClip = (
+    object: any,
+    left: number,
+    top: number,
+    width: number,
+    height: number,
+  ) => {
+    object.set({
+      clipPath: new Rect({
+        originX: "center",
+        originY: "center",
+        left: left + width / 2,
+        top: top + height / 2,
+        width,
+        height,
+        scaleX: 1,
+        scaleY: 1,
+        angle: 0,
+        absolutePositioned: true,
+      }),
+    });
+
+    object.setCoords();
+  };
+
+  /*
+   * Rotate a point around a center.
+   */
+  const rotatePoint = (
+    x: number,
+    y: number,
+    centerX: number,
+    centerY: number,
+    angleDegrees: number,
+  ) => {
+    const radians = (angleDegrees * Math.PI) / 180;
+
+    const cos = Math.cos(radians);
+    const sin = Math.sin(radians);
+
+    const translatedX = x - centerX;
+    const translatedY = y - centerY;
+
+    return {
+      x: centerX + translatedX * cos - translatedY * sin,
+
+      y: centerY + translatedX * sin + translatedY * cos,
+    };
+  };
+
+  /*
+   * ============================================================
    * LOAD IMAGE
    * ============================================================
    */
+
   useEffect(() => {
     const canvas = fabricCanvasRef.current;
 
@@ -83,11 +196,13 @@ const CanvasEditor = ({
 
       canvas.backgroundColor = "#ffffff";
 
-      canvas.clipPath = undefined;
-
       imageRef.current = null;
 
       cropRectRef.current = null;
+
+      rotationRef.current = 0;
+
+      lastRotationRequestRef.current = 0;
 
       onAnnotationSelected(null);
 
@@ -106,6 +221,12 @@ const CanvasEditor = ({
 
     const loadImage = async () => {
       try {
+        const canvas = fabricCanvasRef.current;
+
+        if (!canvas) {
+          return;
+        }
+
         const image = await FabricImage.fromURL(objectUrl, {
           crossOrigin: "anonymous",
         });
@@ -114,21 +235,24 @@ const CanvasEditor = ({
 
         canvas.backgroundColor = "#ffffff";
 
-        canvas.clipPath = undefined;
-
         imageRef.current = image;
 
         cropRectRef.current = null;
+
+        rotationRef.current = 0;
 
         const originalWidth = image.width || 1;
 
         const originalHeight = image.height || 1;
 
         /*
-         * Fit the image inside the
-         * 900 x 600 canvas without
-         * changing its aspect ratio.
+         * Fit the original image inside the editor.
+         *
+         * IMPORTANT:
+         * scaleX and scaleY are intentionally identical.
+         * This preserves the image aspect ratio.
          */
+
         const scale = Math.min(
           canvasWidth / originalWidth,
           canvasHeight / originalHeight,
@@ -138,19 +262,12 @@ const CanvasEditor = ({
 
         const displayedHeight = originalHeight * scale;
 
-        /*
-         * IMPORTANT:
-         *
-         * The image uses top-left
-         * coordinates.
-         */
         image.set({
-          originX: "left",
-          originY: "top",
+          originX: "center",
+          originY: "center",
 
-          left: (canvasWidth - displayedWidth) / 2,
-
-          top: (canvasHeight - displayedHeight) / 2,
+          left: canvasWidth / 2,
+          top: canvasHeight / 2,
 
           scaleX: scale,
           scaleY: scale,
@@ -160,6 +277,8 @@ const CanvasEditor = ({
           selectable: false,
           evented: false,
         });
+
+        baseImageScaleRef.current = scale;
 
         canvas.add(image);
 
@@ -201,9 +320,293 @@ const CanvasEditor = ({
 
   /*
    * ============================================================
+   * ROTATE ENTIRE COMPOSITION
+   * ============================================================
+   *
+   * IMPORTANT:
+   *
+   * A crop is destructive. After a crop is applied, the current
+   * image becomes a brand-new independent Fabric image.
+   *
+   * Therefore rotation NEVER rotates a crop rectangle or a
+   * clipPath. It only rotates the current image and annotations.
+   *
+   * This gives us:
+   *
+   * Crop -> independent image
+   * Rotate -> independent image rotates normally
+   * Crop again -> another independent image
+   *
+   * No crop state survives after a crop is applied.
+   * ============================================================
+   */
+
+  useEffect(() => {
+    if (rotationRequest.id === 0) {
+      return;
+    }
+
+    if (rotationRequest.id === lastRotationRequestRef.current) {
+      return;
+    }
+
+    lastRotationRequestRef.current = rotationRequest.id;
+
+    const canvas = fabricCanvasRef.current;
+    const image = imageRef.current;
+
+    if (!canvas || !image) {
+      return;
+    }
+
+    /*
+     * A crop rectangle is only an editing UI.
+     * Never allow rotation while it is present.
+     */
+    if (cropRectRef.current) {
+      return;
+    }
+
+    const direction = rotationRequest.direction === "right" ? 90 : -90;
+
+    const previousRotation = rotationRef.current;
+
+    const nextRotation = (((previousRotation + direction) % 360) + 360) % 360;
+
+    const sourceWidth = image.width || 1;
+    const sourceHeight = image.height || 1;
+
+    /*
+     * The source image dimensions are independent of
+     * its current Fabric scale.
+     *
+     * For 90° / 270° the visual width and height swap.
+     */
+    const quarterTurn = nextRotation === 90 || nextRotation === 270;
+
+    const rotatedWidth = quarterTurn ? sourceHeight : sourceWidth;
+
+    const rotatedHeight = quarterTurn ? sourceWidth : sourceHeight;
+
+    /*
+     * Calculate the correct display scale from the
+     * ORIGINAL dimensions of the current image.
+     *
+     * This prevents cumulative shrinking:
+     *
+     * landscape -> portrait -> landscape
+     *
+     * returns to the same scale.
+     */
+    /*
+     * Keep the current image at its established base size
+     * whenever that size fits the editor.
+     *
+     * Only scale down when a 90° rotation would make the
+     * image larger than the canvas.
+     *
+     * This is especially important after cropping: a cropped
+     * image keeps its own dimensions instead of being enlarged
+     * just because it was rotated.
+     */
+    const maxFitScale = Math.min(
+      canvasWidth / rotatedWidth,
+      canvasHeight / rotatedHeight,
+    );
+
+    const targetScale = Math.min(baseImageScaleRef.current, maxFitScale);
+
+    const currentScale = image.scaleX || 1;
+
+    const compositionScale = targetScale / currentScale;
+
+    /*
+     * The image center is the single rotation center
+     * for the entire composition.
+     */
+    const center = image.getCenterPoint();
+
+    const annotations = getCompositionObjects(canvas);
+
+    /*
+     * ----------------------------------------------------------
+     * 1. Rotate the image.
+     * ----------------------------------------------------------
+     */
+    image.set({
+      angle: nextRotation,
+      scaleX: targetScale,
+      scaleY: targetScale,
+    });
+
+    image.setCoords();
+
+    /*
+     * ----------------------------------------------------------
+     * 2. Rotate every annotation around the image center.
+     * ----------------------------------------------------------
+     */
+    annotations.forEach((object: any) => {
+      const objectCenter = object.getCenterPoint();
+
+      const rotatedCenter = rotatePoint(
+        objectCenter.x,
+        objectCenter.y,
+        center.x,
+        center.y,
+        direction,
+      );
+
+      object.rotate(Number(object.angle || 0) + direction);
+
+      object.setPositionByOrigin(rotatedCenter, "center", "center");
+
+      /*
+       * If this annotation belongs to a previously cropped
+       * composition, rotate its fixed crop boundary as well.
+       * The crop boundary belongs to the current image, not to
+       * the annotation itself.
+       */
+      const annotationClip = object.clipPath;
+
+      if (annotationClip) {
+        const clipCenter = annotationClip.getCenterPoint();
+
+        const rotatedClipCenter = rotatePoint(
+          clipCenter.x,
+          clipCenter.y,
+          center.x,
+          center.y,
+          direction,
+        );
+
+        annotationClip.set({
+          left: rotatedClipCenter.x,
+          top: rotatedClipCenter.y,
+          angle: Number(annotationClip.angle || 0) + direction,
+        });
+
+        annotationClip.setCoords();
+      }
+
+      object.setCoords();
+    });
+
+    /*
+     * ----------------------------------------------------------
+     * 3. Scale annotations by exactly the same amount
+     *    as the image.
+     * ----------------------------------------------------------
+     *
+     * The cropped image itself is a raster image whose
+     * dimensions are already in canvas pixels. Therefore
+     * annotations must follow the same scale when the
+     * rotated image is fitted to the editor.
+     */
+    if (Math.abs(compositionScale - 1) > 0.000001) {
+      annotations.forEach((object: any) => {
+        const objectCenter = object.getCenterPoint();
+
+        const scaledCenter = {
+          x: center.x + (objectCenter.x - center.x) * compositionScale,
+
+          y: center.y + (objectCenter.y - center.y) * compositionScale,
+        };
+
+        object.set({
+          scaleX: (object.scaleX || 1) * compositionScale,
+
+          scaleY: (object.scaleY || 1) * compositionScale,
+        });
+
+        object.setPositionByOrigin(scaledCenter, "center", "center");
+
+        const annotationClip = object.clipPath;
+
+        if (annotationClip) {
+          const clipCenter = annotationClip.getCenterPoint();
+
+          annotationClip.set({
+            left: center.x + (clipCenter.x - center.x) * compositionScale,
+
+            top: center.y + (clipCenter.y - center.y) * compositionScale,
+
+            scaleX: (annotationClip.scaleX || 1) * compositionScale,
+
+            scaleY: (annotationClip.scaleY || 1) * compositionScale,
+          });
+
+          annotationClip.setCoords();
+        }
+
+        object.setCoords();
+      });
+    }
+
+    /*
+     * ----------------------------------------------------------
+     * 4. Always keep the image centered.
+     * ----------------------------------------------------------
+     *
+     * Cropped images are already created centered, but this
+     * also protects against any small position drift.
+     */
+    const finalImageCenter = image.getCenterPoint();
+
+    const offsetX = canvasWidth / 2 - finalImageCenter.x;
+
+    const offsetY = canvasHeight / 2 - finalImageCenter.y;
+
+    if (Math.abs(offsetX) > 0.000001 || Math.abs(offsetY) > 0.000001) {
+      image.left = (image.left || 0) + offsetX;
+
+      image.top = (image.top || 0) + offsetY;
+
+      image.setCoords();
+
+      annotations.forEach((object: any) => {
+        object.left = (object.left || 0) + offsetX;
+
+        object.top = (object.top || 0) + offsetY;
+
+        const annotationClip = object.clipPath;
+
+        if (annotationClip) {
+          annotationClip.left = (annotationClip.left || 0) + offsetX;
+
+          annotationClip.top = (annotationClip.top || 0) + offsetY;
+
+          annotationClip.setCoords();
+        }
+
+        object.setCoords();
+      });
+    }
+
+    rotationRef.current = nextRotation;
+
+    canvas.sendObjectToBack(image);
+
+    canvas.requestRenderAll();
+
+    onAnnotationSelected(null);
+
+    onImageRotated(nextRotation, targetScale, targetScale);
+  }, [
+    rotationRequest,
+    canvasWidth,
+    canvasHeight,
+    fabricCanvasRef,
+    onImageRotated,
+    onAnnotationSelected,
+  ]);
+
+  /*
+   * ============================================================
    * TOOL / SELECTION STATE
    * ============================================================
    */
+
   useEffect(() => {
     const canvas = fabricCanvasRef.current;
 
@@ -211,7 +614,7 @@ const CanvasEditor = ({
       return;
     }
 
-    canvas.getObjects().forEach((object) => {
+    canvas.getObjects().forEach((object: any) => {
       if (object === imageRef.current) {
         object.set({
           selectable: false,
@@ -231,14 +634,7 @@ const CanvasEditor = ({
         return;
       }
 
-      const annotationType = object.get("annotationType") as string | undefined;
-
-      if (
-        annotationType === "drawing" ||
-        annotationType === "rectangle" ||
-        annotationType === "circle" ||
-        annotationType === "text"
-      ) {
+      if (isAnnotation(object)) {
         object.set({
           selectable: activeTool === "select",
 
@@ -247,7 +643,7 @@ const CanvasEditor = ({
       }
     });
 
-    if (activeTool !== "select") {
+    if (activeTool !== "select" && activeTool !== "crop") {
       canvas.discardActiveObject();
 
       onAnnotationSelected(null);
@@ -261,6 +657,7 @@ const CanvasEditor = ({
    * SELECTED ANNOTATION
    * ============================================================
    */
+
   useEffect(() => {
     const canvas = fabricCanvasRef.current;
 
@@ -360,6 +757,7 @@ const CanvasEditor = ({
    * DIRECT TEXT EDITING SYNC
    * ============================================================
    */
+
   useEffect(() => {
     const canvas = fabricCanvasRef.current;
 
@@ -413,6 +811,7 @@ const CanvasEditor = ({
    * SELECTED ANNOTATION PROPERTY EDITING
    * ============================================================
    */
+
   useEffect(() => {
     const canvas = fabricCanvasRef.current;
 
@@ -492,6 +891,7 @@ const CanvasEditor = ({
    * DELETE ANNOTATION
    * ============================================================
    */
+
   useEffect(() => {
     const canvas = fabricCanvasRef.current;
 
@@ -560,6 +960,7 @@ const CanvasEditor = ({
    * PENCIL
    * ============================================================
    */
+
   useEffect(() => {
     const canvas = fabricCanvasRef.current;
 
@@ -615,6 +1016,7 @@ const CanvasEditor = ({
    * RECTANGLE / CIRCLE
    * ============================================================
    */
+
   useEffect(() => {
     const canvas = fabricCanvasRef.current;
 
@@ -656,7 +1058,7 @@ const CanvasEditor = ({
 
       let shape = canvas
         .getObjects()
-        .find((object) => object.get("isTemporaryShape") === true);
+        .find((object: any) => object.get("isTemporaryShape") === true);
 
       if (!shape) {
         if (activeTool === "rectangle") {
@@ -746,7 +1148,7 @@ const CanvasEditor = ({
 
       const temporaryShape = canvas
         .getObjects()
-        .find((object) => object.get("isTemporaryShape") === true);
+        .find((object: any) => object.get("isTemporaryShape") === true);
 
       if (temporaryShape) {
         temporaryShape.set({
@@ -783,6 +1185,7 @@ const CanvasEditor = ({
    * TEXT
    * ============================================================
    */
+
   useEffect(() => {
     const canvas = fabricCanvasRef.current;
 
@@ -797,9 +1200,11 @@ const CanvasEditor = ({
 
       const textObject = new IText(text || "Type here", {
         originX: "left",
+
         originY: "top",
 
         left: pointer.x,
+
         top: pointer.y,
 
         fill: brushColor,
@@ -839,7 +1244,20 @@ const CanvasEditor = ({
    * ============================================================
    * CROP MODE
    * ============================================================
+   *
+   * Crop can be activated at ANY point:
+   *
+   * Image
+   * Image + annotations
+   * Rotated image
+   * Rotated image + annotations
+   * Already cropped image
+   *
+   * The crop rectangle is always created using
+   * the CURRENT visual image bounds.
+   * ============================================================
    */
+
   useEffect(() => {
     const canvas = fabricCanvasRef.current;
 
@@ -868,40 +1286,87 @@ const CanvasEditor = ({
     onCropModeChange(true);
 
     /*
-     * Image bounds.
+     * Remove an old temporary crop box
+     * before creating a new one.
      */
-    const imageLeft = image.left || 0;
+    if (cropRectRef.current) {
+      canvas.remove(cropRectRef.current);
 
-    const imageTop = image.top || 0;
-
-    const imageWidth = image.getScaledWidth();
-
-    const imageHeight = image.getScaledHeight();
+      cropRectRef.current = null;
+    }
 
     /*
-     * Initial crop selection:
-     * 70% of image dimensions,
-     * centered exactly on image.
+     * Get CURRENT rotated image bounds.
      */
-    const cropWidth = imageWidth * 0.7;
+    image.setCoords();
 
-    const cropHeight = imageHeight * 0.7;
+    const imageBounds = image.getBoundingRect();
 
-    const cropLeft = imageLeft + (imageWidth - cropWidth) / 2;
+    /*
+     * If a previous crop exists, use its
+     * visible bounding area as the maximum
+     * available crop area.
+     */
+    let availableLeft = imageBounds.left;
 
-    const cropTop = imageTop + (imageHeight - cropHeight) / 2;
+    let availableTop = imageBounds.top;
+
+    let availableWidth = imageBounds.width;
+
+    let availableHeight = imageBounds.height;
+
+    const existingClip = canvas.clipPath as Rect | undefined;
+
+    if (existingClip) {
+      existingClip.setCoords();
+
+      const clipBounds = existingClip.getBoundingRect();
+
+      const right = Math.min(
+        imageBounds.left + imageBounds.width,
+        clipBounds.left + clipBounds.width,
+      );
+
+      const bottom = Math.min(
+        imageBounds.top + imageBounds.height,
+        clipBounds.top + clipBounds.height,
+      );
+
+      availableLeft = Math.max(imageBounds.left, clipBounds.left);
+
+      availableTop = Math.max(imageBounds.top, clipBounds.top);
+
+      availableWidth = Math.max(0, right - availableLeft);
+
+      availableHeight = Math.max(0, bottom - availableTop);
+    }
+
+    /*
+     * Default crop = 70% of current available area.
+     */
+    const cropWidth = availableWidth * 0.7;
+
+    const cropHeight = availableHeight * 0.7;
+
+    const cropLeft = availableLeft + (availableWidth - cropWidth) / 2;
+
+    const cropTop = availableTop + (availableHeight - cropHeight) / 2;
 
     const cropRect = new Rect({
       originX: "left",
+
       originY: "top",
 
       left: cropLeft,
+
       top: cropTop,
 
       width: cropWidth,
+
       height: cropHeight,
 
       scaleX: 1,
+
       scaleY: 1,
 
       fill: "rgba(255,255,255,0.12)",
@@ -915,8 +1380,6 @@ const CanvasEditor = ({
       selectable: true,
 
       evented: true,
-
-      hasRotatingPoint: false,
 
       lockRotation: true,
 
@@ -934,7 +1397,9 @@ const CanvasEditor = ({
     canvas.requestRenderAll();
 
     /*
-     * Keep crop inside image.
+     * ----------------------------------------------------------
+     * Keep crop inside the current available area.
+     * ----------------------------------------------------------
      */
     const constrainCrop = () => {
       const currentCrop = cropRectRef.current;
@@ -945,32 +1410,65 @@ const CanvasEditor = ({
         return;
       }
 
-      const imageLeft = currentImage.left || 0;
+      currentImage.setCoords();
 
-      const imageTop = currentImage.top || 0;
+      const bounds = currentImage.getBoundingRect();
 
-      const imageWidth = currentImage.getScaledWidth();
-
-      const imageHeight = currentImage.getScaledHeight();
-
-      let currentWidth = currentCrop.getScaledWidth();
-
-      let currentHeight = currentCrop.getScaledHeight();
+      let availableBounds = {
+        left: bounds.left,
+        top: bounds.top,
+        width: bounds.width,
+        height: bounds.height,
+      };
 
       /*
-       * Don't allow crop selection
-       * to become larger than image.
+       * If there is already a crop clip,
+       * constrain the new crop inside it.
        */
-      if (currentWidth > imageWidth) {
-        currentCrop.scaleX = imageWidth / Math.max(currentCrop.width || 1, 1);
+      const clip = canvas.clipPath as Rect | undefined;
 
-        currentWidth = currentCrop.getScaledWidth();
+      if (clip) {
+        clip.setCoords();
+
+        const clipBounds = clip.getBoundingRect();
+
+        const right = Math.min(
+          bounds.left + bounds.width,
+          clipBounds.left + clipBounds.width,
+        );
+
+        const bottom = Math.min(
+          bounds.top + bounds.height,
+          clipBounds.top + clipBounds.height,
+        );
+
+        availableBounds = {
+          left: Math.max(bounds.left, clipBounds.left),
+
+          top: Math.max(bounds.top, clipBounds.top),
+
+          width: Math.max(0, right - Math.max(bounds.left, clipBounds.left)),
+
+          height: Math.max(0, bottom - Math.max(bounds.top, clipBounds.top)),
+        };
       }
 
-      if (currentHeight > imageHeight) {
-        currentCrop.scaleY = imageHeight / Math.max(currentCrop.height || 1, 1);
+      let width = currentCrop.getScaledWidth();
 
-        currentHeight = currentCrop.getScaledHeight();
+      let height = currentCrop.getScaledHeight();
+
+      if (width > availableBounds.width) {
+        currentCrop.scaleX =
+          availableBounds.width / Math.max(currentCrop.width || 1, 1);
+
+        width = currentCrop.getScaledWidth();
+      }
+
+      if (height > availableBounds.height) {
+        currentCrop.scaleY =
+          availableBounds.height / Math.max(currentCrop.height || 1, 1);
+
+        height = currentCrop.getScaledHeight();
       }
 
       let left = currentCrop.left || 0;
@@ -978,13 +1476,13 @@ const CanvasEditor = ({
       let top = currentCrop.top || 0;
 
       left = Math.max(
-        imageLeft,
-        Math.min(left, imageLeft + imageWidth - currentWidth),
+        availableBounds.left,
+        Math.min(left, availableBounds.left + availableBounds.width - width),
       );
 
       top = Math.max(
-        imageTop,
-        Math.min(top, imageTop + imageHeight - currentHeight),
+        availableBounds.top,
+        Math.min(top, availableBounds.top + availableBounds.height - height),
       );
 
       currentCrop.set({
@@ -1028,7 +1526,33 @@ const CanvasEditor = ({
    * ============================================================
    * APPLY CROP
    * ============================================================
+   *
+   * CROP IS DESTRUCTIVE.
+   *
+   * This is the important architectural change.
+   *
+   * We do NOT keep a canvas clipPath after cropping.
+   *
+   * Instead:
+   *
+   * 1. Read the visible image pixels inside the crop area.
+   * 2. Create a NEW FabricImage from those pixels.
+   * 3. Remove the old image.
+   * 4. Remove the temporary crop rectangle.
+   * 5. Move annotations into the new image coordinate space.
+   * 6. Reset image rotation to 0.
+   *
+   * After this function finishes, there is no relationship
+   * between the new image and the old crop rectangle.
+   *
+   * Therefore:
+   *
+   * Crop -> Rotate -> Crop -> Rotate -> Crop
+   *
+   * works independently every time.
+   * ============================================================
    */
+
   useEffect(() => {
     const canvas = fabricCanvasRef.current;
 
@@ -1042,7 +1566,6 @@ const CanvasEditor = ({
       }
 
       const image = imageRef.current;
-
       const cropRect = cropRectRef.current;
 
       if (!image || !cropRect) {
@@ -1051,149 +1574,127 @@ const CanvasEditor = ({
 
       isApplyingCropRef.current = true;
 
+      /*
+       * Save the objects before changing the canvas.
+       */
+      const annotations = getCompositionObjects(canvas);
+
       try {
+        image.setCoords();
         cropRect.setCoords();
 
-        const imageElement = image.getElement() as
-          | HTMLImageElement
-          | HTMLCanvasElement;
-
-        const naturalWidth =
-          imageElement instanceof HTMLImageElement
-            ? imageElement.naturalWidth
-            : imageElement.width;
-
-        const naturalHeight =
-          imageElement instanceof HTMLImageElement
-            ? imageElement.naturalHeight
-            : imageElement.height;
-
-        const imageScaleX = image.scaleX || 1;
-
-        const imageScaleY = image.scaleY || 1;
-
-        const imageLeft = image.left || 0;
-
-        const imageTop = image.top || 0;
-
-        const cropLeft = cropRect.left || 0;
-
-        const cropTop = cropRect.top || 0;
-
-        const cropDisplayWidth = cropRect.getScaledWidth();
-
-        const cropDisplayHeight = cropRect.getScaledHeight();
-
         /*
-         * Convert canvas coordinates
-         * to source image pixels.
-         */
-        const sourceLeft = (cropLeft - imageLeft) / imageScaleX;
-
-        const sourceTop = (cropTop - imageTop) / imageScaleY;
-
-        const sourceWidth = cropDisplayWidth / imageScaleX;
-
-        const sourceHeight = cropDisplayHeight / imageScaleY;
-
-        /*
-         * Clamp source rectangle.
-         */
-        const finalLeft = Math.max(0, Math.min(sourceLeft, naturalWidth - 1));
-
-        const finalTop = Math.max(0, Math.min(sourceTop, naturalHeight - 1));
-
-        const finalWidth = Math.min(sourceWidth, naturalWidth - finalLeft);
-
-        const finalHeight = Math.min(sourceHeight, naturalHeight - finalTop);
-
-        if (finalWidth <= 1 || finalHeight <= 1) {
-          return;
-        }
-
-        /*
-         * Output bitmap has exactly
-         * the same aspect ratio as
-         * selected source region.
-         */
-        const outputWidth = Math.max(1, Math.round(finalWidth));
-
-        const outputHeight = Math.max(1, Math.round(finalHeight));
-
-        const offscreenCanvas = document.createElement("canvas");
-
-        offscreenCanvas.width = outputWidth;
-
-        offscreenCanvas.height = outputHeight;
-
-        const context = offscreenCanvas.getContext("2d");
-
-        if (!context) {
-          return;
-        }
-
-        context.drawImage(
-          imageElement,
-
-          finalLeft,
-          finalTop,
-
-          finalWidth,
-          finalHeight,
-
-          0,
-          0,
-
-          outputWidth,
-          outputHeight,
-        );
-
-        const croppedDataUrl = offscreenCanvas.toDataURL("image/png");
-
-        const croppedImage = await FabricImage.fromURL(croppedDataUrl);
-
-        /*
-         * Preserve annotations.
-         */
-        const annotations = canvas
-          .getObjects()
-          .filter((object) => object !== image && object !== cropRect);
-
-        /*
-         * Remove old image.
-         */
-        canvas.remove(image);
-
-        /*
-         * Remove crop selection.
-         */
-        canvas.remove(cropRect);
-
-        imageRef.current = croppedImage;
-
-        cropRectRef.current = null;
-
-        /*
-         * The selected crop area
-         * becomes the displayed image.
+         * Crop rectangle is axis-aligned because rotation
+         * is locked while the crop tool is active.
          *
-         * The scale is based on
-         * the actual output bitmap.
+         * getBoundingRect() gives us actual canvas-space
+         * coordinates, including any scaling.
          */
-        const newScale = Math.min(
-          cropDisplayWidth / outputWidth,
-          cropDisplayHeight / outputHeight,
+        const cropBounds = cropRect.getBoundingRect();
+
+        const cropLeft = Math.max(0, Math.round(cropBounds.left));
+
+        const cropTop = Math.max(0, Math.round(cropBounds.top));
+
+        const cropRight = Math.min(
+          canvasWidth,
+          Math.round(cropBounds.left + cropBounds.width),
         );
 
-        croppedImage.set({
-          originX: "left",
-          originY: "top",
+        const cropBottom = Math.min(
+          canvasHeight,
+          Math.round(cropBounds.top + cropBounds.height),
+        );
 
+        const cropWidth = cropRight - cropLeft;
+
+        const cropHeight = cropBottom - cropTop;
+
+        if (cropWidth <= 1 || cropHeight <= 1) {
+          return;
+        }
+
+        /*
+         * --------------------------------------------------------
+         * 1. Hide everything except the image.
+         * --------------------------------------------------------
+         *
+         * The new cropped image must contain ONLY the
+         * image pixels. Annotations remain real Fabric
+         * objects and therefore stay editable.
+         */
+        const previousVisibility = new Map<any, boolean>();
+
+        canvas.getObjects().forEach((object: any) => {
+          previousVisibility.set(object, object.visible !== false);
+
+          object.set({
+            visible: object === image,
+          });
+        });
+
+        cropRect.set({
+          visible: false,
+        });
+
+        /*
+         * There must never be a canvas-level crop clip. The
+         * current image is physically cropped and annotations
+         * get their own fixed crop boundary below.
+         */
+        canvas.clipPath = undefined;
+
+        canvas.discardActiveObject();
+
+        canvas.renderAll();
+
+        /*
+         * --------------------------------------------------------
+         * 2. Create actual cropped image pixels.
+         * --------------------------------------------------------
+         */
+        const croppedDataUrl = canvas.toDataURL({
+          format: "png",
           left: cropLeft,
           top: cropTop,
+          width: cropWidth,
+          height: cropHeight,
+          multiplier: 1,
+        });
 
-          scaleX: newScale,
-          scaleY: newScale,
+        /*
+         * Restore object visibility before awaiting the
+         * asynchronous Fabric image creation.
+         */
+        previousVisibility.forEach((visible, object) => {
+          object.set({ visible });
+        });
+
+        cropRect.set({
+          visible: true,
+        });
+
+        /*
+         * --------------------------------------------------------
+         * 3. Create the NEW independent image.
+         * --------------------------------------------------------
+         */
+        const newImage = await FabricImage.fromURL(croppedDataUrl);
+
+        /*
+         * The new image is already expressed in canvas
+         * pixels. Start it with scale 1.
+         */
+        newImage.set({
+          originX: "center",
+          originY: "center",
+
+          left: canvasWidth / 2,
+
+          top: canvasHeight / 2,
+
+          scaleX: 1,
+          scaleY: 1,
 
           angle: 0,
 
@@ -1201,58 +1702,115 @@ const CanvasEditor = ({
           evented: false,
         });
 
-        canvas.add(croppedImage);
-
-        canvas.sendObjectToBack(croppedImage);
-
         /*
-         * Restore annotations.
+         * --------------------------------------------------------
+         * 4. Move annotations from old canvas coordinates
+         *    into the new cropped coordinate system.
+         * --------------------------------------------------------
+         *
+         * Old point:
+         *
+         *   (x, y)
+         *
+         * New point:
+         *
+         *   (x - cropLeft, y - cropTop)
+         *
+         * Then place the cropped image in the center of
+         * the editor.
          */
-        annotations.forEach((object) => {
-          object.set({
-            selectable: true,
-            evented: true,
-          });
+        const newImageLeft = canvasWidth / 2;
+
+        const newImageTop = canvasHeight / 2;
+
+        const croppedCenterX = cropWidth / 2;
+
+        const croppedCenterY = cropHeight / 2;
+
+        const offsetX = newImageLeft - croppedCenterX - cropLeft;
+
+        const offsetY = newImageTop - croppedCenterY - cropTop;
+
+        annotations.forEach((object: any) => {
+          const objectCenter = object.getCenterPoint();
+
+          object.setPositionByOrigin(
+            {
+              x: objectCenter.x + offsetX,
+
+              y: objectCenter.y + offsetY,
+            },
+            "center",
+            "center",
+          );
+
+          /*
+           * Remove any previous crop clip and replace it with
+           * the crop boundary in the NEW coordinate system.
+           * This means the annotation can never show its old
+           * pixels outside the newly cropped image.
+           */
+          setAnnotationCropClip(
+            object,
+            canvasWidth / 2 - cropWidth / 2,
+            canvasHeight / 2 - cropHeight / 2,
+            cropWidth,
+            cropHeight,
+          );
 
           object.setCoords();
         });
 
         /*
-         * Clip everything to the
-         * selected crop region.
+         * --------------------------------------------------------
+         * 5. Replace the old image.
+         * --------------------------------------------------------
          */
-        const clipRect = new Rect({
-          originX: "left",
-          originY: "top",
+        canvas.remove(image);
 
-          left: cropLeft,
-          top: cropTop,
+        canvas.add(newImage);
 
-          width: outputWidth,
+        imageRef.current = newImage;
 
-          height: outputHeight,
+        /*
+         * The crop has now created a completely new
+         * coordinate system. Rotation starts again from 0°.
+         */
+        rotationRef.current = 0;
+        baseImageScaleRef.current = 1;
 
-          scaleX: newScale,
-          scaleY: newScale,
+        /*
+         * Remove the temporary crop object.
+         */
+        canvas.remove(cropRect);
 
-          absolutePositioned: true,
-        });
+        cropRectRef.current = null;
 
-        canvas.clipPath = clipRect;
+        /*
+         * New image must remain behind annotations.
+         */
+        canvas.sendObjectToBack(newImage);
 
         canvas.discardActiveObject();
 
         canvas.requestRenderAll();
 
+        /*
+         * --------------------------------------------------------
+         * 6. Update editor state.
+         * --------------------------------------------------------
+         *
+         * The cropped dimensions are now the dimensions of
+         * the CURRENT independent image.
+         */
         onCropApplied({
-          originalWidth: outputWidth,
-
-          originalHeight: outputHeight,
+          originalWidth: cropWidth,
+          originalHeight: cropHeight,
 
           rotation: 0,
 
-          scaleX: newScale,
-          scaleY: newScale,
+          scaleX: 1,
+          scaleY: 1,
         });
 
         onAnnotationSelected(null);
@@ -1268,18 +1826,23 @@ const CanvasEditor = ({
     return () => {
       canvas.off("mouse:dblclick", handleDoubleClick);
     };
-  }, [activeTool, fabricCanvasRef, onCropApplied, onAnnotationSelected]);
+  }, [
+    activeTool,
+    canvasWidth,
+    canvasHeight,
+    fabricCanvasRef,
+    onCropApplied,
+    onAnnotationSelected,
+  ]);
+
+  /*
+   * ============================================================
+   * RENDER
+   * ============================================================
+   */
 
   return (
     <div className="canvas-editor">
-      {/* 
-        IMPORTANT:
-        This wrapper MUST NOT be called
-        "canvas-container".
-
-        Fabric.js creates its own
-        ".canvas-container" internally.
-      */}
       <div className="editor-canvas-wrapper">
         <canvas ref={canvasElementRef} />
 

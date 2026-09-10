@@ -9,6 +9,7 @@
 html,
 body {
   margin: 0;
+
   min-width: 320px;
   min-height: 100vh;
 
@@ -271,6 +272,50 @@ select {
 }
 
 /* ============================================================
+   ROTATION
+   ============================================================ */
+
+.rotation-actions {
+  display: flex;
+
+  flex-direction: column;
+
+  gap: 7px;
+}
+
+.rotate-button {
+  width: 100%;
+
+  min-height: 38px;
+
+  padding: 8px 10px;
+
+  border: 1px solid #d1d5db;
+
+  border-radius: 8px;
+
+  background: white;
+
+  color: #111827;
+
+  font-size: 13px;
+
+  font-weight: 600;
+
+  cursor: pointer;
+
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.rotate-button:hover {
+  background: #f3f4f6;
+
+  border-color: #9ca3af;
+}
+
+/* ============================================================
    ANNOTATION PROPERTIES
    ============================================================ */
 
@@ -441,17 +486,6 @@ select {
   align-items: center;
 }
 
-/*
- * IMPORTANT:
- *
- * This is OUR wrapper.
- *
- * Do NOT call this ".canvas-container".
- *
- * Fabric.js creates its own ".canvas-container"
- * automatically.
- */
-
 .editor-canvas-wrapper {
   width: fit-content;
 
@@ -467,10 +501,14 @@ select {
 }
 
 /*
- * Fabric creates its own canvas-container.
+ * IMPORTANT:
  *
- * We style it carefully without adding
- * padding or borders to it.
+ * Fabric creates its own
+ * .canvas-container.
+ *
+ * We must not add padding,
+ * borders, transforms or sizing
+ * to it.
  */
 
 .editor-canvas-wrapper .canvas-container {
@@ -487,30 +525,13 @@ select {
   box-shadow: none !important;
 }
 
-/*
- * Keep Fabric's two canvases perfectly
- * aligned.
- */
-
 .editor-canvas-wrapper .canvas-container canvas {
   display: block;
 }
 
-/*
- * Upper Fabric canvas receives mouse
- * interaction.
- */
-
 .editor-canvas-wrapper .canvas-container .upper-canvas {
   cursor: default;
 }
-
-/*
- * Don't modify width/height of Fabric's
- * canvas elements with CSS.
- *
- * Fabric controls their exact dimensions.
- */
 
 /* ============================================================
    CANVAS HELP
@@ -527,7 +548,7 @@ select {
 }
 
 /* ============================================================
-   CROP ACTIONS
+   CROP
    ============================================================ */
 
 .crop-actions {
@@ -652,6 +673,16 @@ select {
   font-size: 12px;
 
   box-shadow: 0 2px 8px rgb(0 0 0 / 6%);
+}
+
+.rotation-status {
+  padding-left: 10px;
+
+  border-left: 1px solid #d1d5db;
+
+  font-weight: 600;
+
+  color: #111827;
 }
 
 .crop-status {

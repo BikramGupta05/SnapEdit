@@ -10,6 +10,8 @@ interface ToolbarProps {
 
   onClear: () => void;
 
+  onRotate: (direction: "left" | "right") => void;
+
   hasImage: boolean;
 
   brushColor: string;
@@ -34,6 +36,7 @@ const Toolbar = ({
   onToolChange,
   onImageUpload,
   onClear,
+  onRotate,
   hasImage,
 
   brushColor,
@@ -132,6 +135,10 @@ const Toolbar = ({
 
   return (
     <aside className="toolbar">
+      {/* ======================================================
+          IMAGE
+          ====================================================== */}
+
       <div className="toolbar-section">
         <h2>Image</h2>
 
@@ -141,6 +148,10 @@ const Toolbar = ({
           <input type="file" accept="image/*" onChange={handleFileChange} />
         </label>
       </div>
+
+      {/* ======================================================
+          TOOLS
+          ====================================================== */}
 
       <div className="toolbar-section">
         <h2>Tools</h2>
@@ -161,6 +172,38 @@ const Toolbar = ({
           ))}
         </div>
       </div>
+
+      {/* ======================================================
+          ROTATION
+          ====================================================== */}
+
+      {hasImage && (
+        <div className="toolbar-section">
+          <h2>Rotate</h2>
+
+          <div className="rotation-actions">
+            <button
+              type="button"
+              className="rotate-button"
+              onClick={() => onRotate("left")}
+            >
+              ↶ Rotate Left
+            </button>
+
+            <button
+              type="button"
+              className="rotate-button"
+              onClick={() => onRotate("right")}
+            >
+              ↷ Rotate Right
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================
+          ANNOTATION PROPERTIES
+          ====================================================== */}
 
       {showProperties && (
         <div className="toolbar-section">
@@ -244,6 +287,10 @@ const Toolbar = ({
           </div>
         </div>
       )}
+
+      {/* ======================================================
+          CLEAR
+          ====================================================== */}
 
       <div className="toolbar-section toolbar-bottom">
         <button
