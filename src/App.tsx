@@ -13,17 +13,19 @@ import type {
 
 import "./App.css";
 
+interface HistoryRequest {
+  id: number;
+  direction: "undo" | "redo";
+  snapshot: string;
+}
+
 function App() {
   const [activeTool, setActiveTool] = useState<EditorTool>("select");
-
   const [imageFile, setImageFile] = useState<File | null>(null);
 
   const [brushColor, setBrushColor] = useState("#111827");
-
   const [brushWidth, setBrushWidth] = useState(4);
-
   const [textFontSize, setTextFontSize] = useState(28);
-
   const [textValue, setTextValue] = useState("");
 
   const [selectedAnnotation, setSelectedAnnotation] =
@@ -36,86 +38,60 @@ function App() {
 
   const [isCropping, setIsCropping] = useState(false);
 
-  /*
-   * Rotation request.
-   *
-   * The number changes every time
-   * the user requests a rotation.
-   *
-   * CanvasEditor watches this value
-   * and performs the actual rotation.
-   */
   const [rotationRequest, setRotationRequest] = useState({
     id: 0,
     direction: "right" as "left" | "right",
   });
 
-  /*
-   * ============================================================
-   * IMAGE UPLOAD
-   * ============================================================
-   */
+  const [historyRequest, setHistoryRequest] = useState<HistoryRequest>({
+    id: 0,
+    direction: "undo",
+    snapshot: "",
+  });
+
+  const [historyPast, setHistoryPast] = useState<string[]>([]);
+  const [historyFuture, setHistoryFuture] = useState<string[]>([]);
 
   const handleImageUpload = (file: File) => {
     setImageFile(file);
-
     setActiveTool("select");
-
     setIsCropping(false);
-
     setSelectedAnnotation(null);
-
     setTextValue("");
-
-    setRotationRequest({
-      id: 0,
-      direction: "right",
-    });
+    setRotationRequest({ id: 0, direction: "right" });
 
     setEditorState({
       tool: "select",
       image: null,
     });
-  };
 
-  /*
-   * ============================================================
-   * IMAGE LOADED
-   * ============================================================
-   */
+    setHistoryPast([]);
+    setHistoryFuture([]);
+    setHistoryRequest({
+      id: 0,
+      direction: "undo",
+      snapshot: "",
+    });
+  };
 
   const handleImageLoaded = useCallback((metadata: ImageMetadata) => {
     setEditorState((currentState) => ({
       ...currentState,
       image: metadata,
     }));
-
     setSelectedAnnotation(null);
   }, []);
 
-  /*
-   * ============================================================
-   * ROTATION
-   * ============================================================
-   */
-
   const handleRotate = (direction: "left" | "right") => {
-    if (!imageFile) {
+    if (!imageFile || isCropping) {
       return;
     }
 
     setRotationRequest((currentRequest) => ({
       id: currentRequest.id + 1,
-
       direction,
     }));
   };
-
-  /*
-   * ============================================================
-   * ROTATION METADATA
-   * ============================================================
-   */
 
   const handleImageRotated = useCallback(
     (rotation: number, scaleX: number, scaleY: number) => {
@@ -126,14 +102,10 @@ function App() {
 
         return {
           ...currentState,
-
           image: {
             ...currentState.image,
-
             rotation,
-
             scaleX,
-
             scaleY,
           },
         };
@@ -142,37 +114,22 @@ function App() {
     [],
   );
 
-  /*
-   * ============================================================
-   * CROP
-   * ============================================================
-   */
-
   const handleCropApplied = useCallback((metadata: ImageMetadata) => {
     setEditorState((currentState) => ({
       ...currentState,
       image: metadata,
       tool: "select",
     }));
-
     setActiveTool("select");
-
     setIsCropping(false);
   }, []);
 
   const handleCropModeChange = useCallback((cropping: boolean) => {
     setIsCropping(cropping);
-
     if (cropping) {
       setSelectedAnnotation(null);
     }
   }, []);
-
-  /*
-   * ============================================================
-   * TOOL CHANGE
-   * ============================================================
-   */
 
   const handleToolChange = (tool: EditorTool) => {
     setActiveTool(tool);
@@ -187,12 +144,6 @@ function App() {
     }));
   };
 
-  /*
-   * ============================================================
-   * ANNOTATION SELECTION
-   * ============================================================
-   */
-
   const handleAnnotationSelected = useCallback(
     (annotation: SelectedAnnotation | null) => {
       setSelectedAnnotation(annotation);
@@ -202,81 +153,104 @@ function App() {
       }
 
       setBrushColor(annotation.color);
-
       setBrushWidth(annotation.width);
-
       setTextFontSize(annotation.fontSize);
-
       setTextValue(annotation.text);
     },
     [],
   );
 
-  /*
-   * ============================================================
-   * TEXT VALUE
-   * ============================================================
-   */
+  const handleHistoryStateChange = useCallback((snapshot: string) => {
+    setHistoryPast((currentPast) => {
+      if (currentPast[currentPast.length - 1] === snapshot) {
+        return currentPast;
+      }
 
-  const handleTextValueChange = (value: string) => {
-    setTextValue(value);
+      if (currentPast.length === 0) {
+        return [snapshot];
+      }
+
+      return [...currentPast, snapshot];
+    });
+
+    setHistoryFuture([]);
+  }, []);
+
+  const handleUndo = () => {
+    if (historyPast.length <= 1) {
+      return;
+    }
+
+    const currentSnapshot = historyPast[historyPast.length - 1];
+    const targetSnapshot = historyPast[historyPast.length - 2];
+
+    setHistoryPast((currentPast) => currentPast.slice(0, -1));
+    setHistoryFuture((currentFuture) => [currentSnapshot, ...currentFuture]);
+
+    setHistoryRequest((currentRequest) => ({
+      id: currentRequest.id + 1,
+      direction: "undo",
+      snapshot: targetSnapshot,
+    }));
   };
 
-  /*
-   * ============================================================
-   * CLEAR
-   * ============================================================
-   */
+  const handleRedo = () => {
+    if (historyFuture.length === 0) {
+      return;
+    }
+
+    const targetSnapshot = historyFuture[0];
+    const currentSnapshot = historyPast[historyPast.length - 1];
+
+    setHistoryPast((currentPast) => [...currentPast, targetSnapshot]);
+    setHistoryFuture((currentFuture) => currentFuture.slice(1));
+
+    setHistoryRequest((currentRequest) => ({
+      id: currentRequest.id + 1,
+      direction: "redo",
+      snapshot: targetSnapshot,
+    }));
+
+    void currentSnapshot;
+  };
 
   const handleClearCanvas = () => {
     setImageFile(null);
-
     setIsCropping(false);
-
     setActiveTool("select");
-
     setSelectedAnnotation(null);
-
     setTextValue("");
-
-    setRotationRequest({
+    setRotationRequest({ id: 0, direction: "right" });
+    setEditorState({ tool: "select", image: null });
+    setHistoryPast([]);
+    setHistoryFuture([]);
+    setHistoryRequest({
       id: 0,
-      direction: "right",
-    });
-
-    setEditorState({
-      tool: "select",
-      image: null,
+      direction: "undo",
+      snapshot: "",
     });
   };
 
   const selectedType: AnnotationType | null = selectedAnnotation?.type ?? null;
 
+  const canUndo = Boolean(imageFile) && historyPast.length > 1;
+  const canRedo = Boolean(imageFile) && historyFuture.length > 0;
+
   return (
     <div className="app">
-      {/* ======================================================
-          HEADER
-          ====================================================== */}
-
       <header className="app-header">
         <div>
           <h1>Image Editor</h1>
-
           <p>Edit images, add annotations, and export your work.</p>
         </div>
 
         {imageFile && (
           <div className="image-status">
             <span className="status-dot" />
-
             <span>{imageFile.name}</span>
           </div>
         )}
       </header>
-
-      {/* ======================================================
-          MAIN EDITOR
-          ====================================================== */}
 
       <main className="editor-layout">
         <Toolbar
@@ -294,7 +268,11 @@ function App() {
           onBrushColorChange={setBrushColor}
           onBrushWidthChange={setBrushWidth}
           onTextFontSizeChange={setTextFontSize}
-          onTextValueChange={handleTextValueChange}
+          onTextValueChange={setTextValue}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+          canUndo={canUndo}
+          canRedo={canRedo}
         />
 
         <section className="workspace">
@@ -306,6 +284,8 @@ function App() {
             textFontSize={textFontSize}
             textValue={textValue}
             rotationRequest={rotationRequest}
+            historyRequest={historyRequest}
+            onHistoryStateChange={handleHistoryStateChange}
             onImageLoaded={handleImageLoaded}
             onImageRotated={handleImageRotated}
             onCropApplied={handleCropApplied}
@@ -317,7 +297,6 @@ function App() {
             <div className="empty-state">
               <div className="empty-state-content">
                 <h2>Start editing an image</h2>
-
                 <p>Upload an image from your computer to begin.</p>
               </div>
             </div>

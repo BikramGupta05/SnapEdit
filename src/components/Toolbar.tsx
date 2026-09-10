@@ -3,32 +3,24 @@ import type { AnnotationType, EditorTool } from "../types/editor";
 
 interface ToolbarProps {
   activeTool: EditorTool;
-
   onToolChange: (tool: EditorTool) => void;
-
   onImageUpload: (file: File) => void;
-
   onClear: () => void;
-
   onRotate: (direction: "left" | "right") => void;
-
   hasImage: boolean;
-
   brushColor: string;
   brushWidth: number;
-
   textFontSize: number;
   textValue: string;
-
   selectedAnnotationType: AnnotationType | null;
-
   onBrushColorChange: (color: string) => void;
-
   onBrushWidthChange: (width: number) => void;
-
   onTextFontSizeChange: (size: number) => void;
-
   onTextValueChange: (value: string) => void;
+  onUndo: () => void;
+  onRedo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
 }
 
 const Toolbar = ({
@@ -38,68 +30,40 @@ const Toolbar = ({
   onClear,
   onRotate,
   hasImage,
-
   brushColor,
   brushWidth,
-
   textFontSize,
   textValue,
-
   selectedAnnotationType,
-
   onBrushColorChange,
   onBrushWidthChange,
-
   onTextFontSizeChange,
   onTextValueChange,
+  onUndo,
+  onRedo,
+  canUndo,
+  canRedo,
 }: ToolbarProps) => {
-  const tools: {
-    id: EditorTool;
-    label: string;
-  }[] = [
-    {
-      id: "select",
-      label: "Select",
-    },
-    {
-      id: "pencil",
-      label: "Pencil",
-    },
-    {
-      id: "rectangle",
-      label: "Rectangle",
-    },
-    {
-      id: "circle",
-      label: "Circle",
-    },
-    {
-      id: "text",
-      label: "Text",
-    },
-    {
-      id: "crop",
-      label: "Crop",
-    },
+  const tools: { id: EditorTool; label: string }[] = [
+    { id: "select", label: "Select" },
+    { id: "pencil", label: "Pencil" },
+    { id: "rectangle", label: "Rectangle" },
+    { id: "circle", label: "Circle" },
+    { id: "text", label: "Text" },
+    { id: "crop", label: "Crop" },
   ];
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-
-    if (!file) {
-      return;
-    }
+    if (!file) return;
 
     if (!file.type.startsWith("image/")) {
       window.alert("Please select a valid image file.");
-
       event.target.value = "";
-
       return;
     }
 
     onImageUpload(file);
-
     event.target.value = "";
   };
 
@@ -135,23 +99,38 @@ const Toolbar = ({
 
   return (
     <aside className="toolbar">
-      {/* ======================================================
-          IMAGE
-          ====================================================== */}
-
       <div className="toolbar-section">
         <h2>Image</h2>
 
         <label className="upload-button">
           <span>Upload Image</span>
-
           <input type="file" accept="image/*" onChange={handleFileChange} />
         </label>
       </div>
 
-      {/* ======================================================
-          TOOLS
-          ====================================================== */}
+      <div className="toolbar-section">
+        <h2>History</h2>
+
+        <div className="history-actions">
+          <button
+            type="button"
+            className="rotate-button"
+            onClick={onUndo}
+            disabled={!canUndo}
+          >
+            ↶ Undo
+          </button>
+
+          <button
+            type="button"
+            className="rotate-button"
+            onClick={onRedo}
+            disabled={!canRedo}
+          >
+            ↷ Redo
+          </button>
+        </div>
+      </div>
 
       <div className="toolbar-section">
         <h2>Tools</h2>
@@ -172,10 +151,6 @@ const Toolbar = ({
           ))}
         </div>
       </div>
-
-      {/* ======================================================
-          ROTATION
-          ====================================================== */}
 
       {hasImage && (
         <div className="toolbar-section">
@@ -200,10 +175,6 @@ const Toolbar = ({
           </div>
         </div>
       )}
-
-      {/* ======================================================
-          ANNOTATION PROPERTIES
-          ====================================================== */}
 
       {showProperties && (
         <div className="toolbar-section">
@@ -242,11 +213,7 @@ const Toolbar = ({
                 <label className="setting-label">
                   <div className="setting-label-header">
                     <span>Font Size</span>
-
-                    <span>
-                      {textFontSize}
-                      px
-                    </span>
+                    <span>{textFontSize}px</span>
                   </div>
 
                   <input
@@ -266,11 +233,7 @@ const Toolbar = ({
               <label className="setting-label">
                 <div className="setting-label-header">
                   <span>Thickness</span>
-
-                  <span>
-                    {brushWidth}
-                    px
-                  </span>
+                  <span>{brushWidth}px</span>
                 </div>
 
                 <input
@@ -287,10 +250,6 @@ const Toolbar = ({
           </div>
         </div>
       )}
-
-      {/* ======================================================
-          CLEAR
-          ====================================================== */}
 
       <div className="toolbar-section toolbar-bottom">
         <button

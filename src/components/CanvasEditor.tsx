@@ -34,6 +34,14 @@ interface CanvasEditorProps {
   onCropModeChange: (cropping: boolean) => void;
 
   onAnnotationSelected: (annotation: SelectedAnnotation | null) => void;
+
+  historyRequest: {
+    id: number;
+    direction: "undo" | "redo";
+    snapshot: string;
+  };
+
+  onHistoryStateChange: (snapshot: string) => void;
 }
 
 const CanvasEditor = ({
@@ -54,6 +62,9 @@ const CanvasEditor = ({
   onCropApplied,
   onCropModeChange,
   onAnnotationSelected,
+
+  historyRequest,
+  onHistoryStateChange,
 }: CanvasEditorProps) => {
   const { canvasElementRef, fabricCanvasRef, canvasWidth, canvasHeight } =
     useFabricCanvas();
@@ -80,6 +91,57 @@ const CanvasEditor = ({
   const rotationRef = useRef(0);
 
   const baseImageScaleRef = useRef(1);
+
+  const isRestoringHistoryRef = useRef(false);
+
+  const isApplyingOperationRef = useRef(false);
+
+  const historyTimerRef = useRef<number | null>(null);
+
+  const lastHistoryRequestRef = useRef(0);
+
+  const emitHistoryState = (force = false) => {
+    const canvas = fabricCanvasRef.current;
+
+    if (
+      !canvas ||
+      isRestoringHistoryRef.current ||
+      (isApplyingOperationRef.current && !force)
+    ) {
+      return;
+    }
+
+    if (historyTimerRef.current !== null) {
+      window.clearTimeout(historyTimerRef.current);
+    }
+
+    historyTimerRef.current = window.setTimeout(() => {
+      historyTimerRef.current = null;
+
+      if (
+        isRestoringHistoryRef.current ||
+        (isApplyingOperationRef.current && !force)
+      ) {
+        return;
+      }
+
+      const snapshot = JSON.stringify({
+        canvas: canvas.toObject(["annotationType", "isTemporaryShape"]),
+        rotation: rotationRef.current,
+        baseImageScale: baseImageScaleRef.current,
+      });
+
+      onHistoryStateChange(snapshot);
+    }, 120);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (historyTimerRef.current !== null) {
+        window.clearTimeout(historyTimerRef.current);
+      }
+    };
+  }, []);
 
   /*
    * ============================================================
@@ -258,10 +320,6 @@ const CanvasEditor = ({
           canvasHeight / originalHeight,
         );
 
-        const displayedWidth = originalWidth * scale;
-
-        const displayedHeight = originalHeight * scale;
-
         image.set({
           originX: "center",
           originY: "center",
@@ -295,6 +353,8 @@ const CanvasEditor = ({
           scaleX: scale,
           scaleY: scale,
         });
+
+        emitHistoryState();
       } catch (error) {
         console.error("Failed to load image:", error);
       }
@@ -366,6 +426,8 @@ const CanvasEditor = ({
     if (cropRectRef.current) {
       return;
     }
+
+    isApplyingOperationRef.current = true;
 
     const direction = rotationRequest.direction === "right" ? 90 : -90;
 
@@ -592,6 +654,9 @@ const CanvasEditor = ({
     onAnnotationSelected(null);
 
     onImageRotated(nextRotation, targetScale, targetScale);
+
+    isApplyingOperationRef.current = false;
+    emitHistoryState();
   }, [
     rotationRequest,
     canvasWidth,
@@ -855,6 +920,8 @@ const CanvasEditor = ({
 
       canvas.requestRenderAll();
 
+      emitHistoryState();
+
       return;
     }
 
@@ -876,6 +943,8 @@ const CanvasEditor = ({
       activeObject.setCoords();
 
       canvas.requestRenderAll();
+
+      emitHistoryState();
     }
   }, [
     activeTool,
@@ -884,6 +953,170 @@ const CanvasEditor = ({
     textFontSize,
     textValue,
     fabricCanvasRef,
+  ]);
+
+  /*
+   * ============================================================
+   * HISTORY TRACKING
+   * ============================================================
+   *
+   * Fabric events capture user-driven edits such as drawing,
+   * moving, resizing, deleting, and text editing. Individual
+   * operations such as rotation/crop also call emitHistoryState
+   * explicitly after they finish.
+   */
+
+  useEffect(() => {
+    const canvas = fabricCanvasRef.current;
+
+    if (!canvas) {
+      return;
+    }
+
+    const handleObjectModified = (event: any) => {
+      if (isRestoringHistoryRef.current) {
+        return;
+      }
+
+      const target = event?.target;
+
+      if (
+        target?.get?.("annotationType") === "crop" ||
+        target?.get?.("isTemporaryShape") === true
+      ) {
+        return;
+      }
+
+      emitHistoryState();
+    };
+
+    const handleCanvasChange = () => {
+      if (isRestoringHistoryRef.current) {
+        return;
+      }
+
+      emitHistoryState();
+    };
+
+    canvas.on("object:modified", handleObjectModified);
+    canvas.on("object:removed", handleCanvasChange);
+    canvas.on("path:created", handleCanvasChange);
+    canvas.on("text:changed", handleCanvasChange);
+
+    return () => {
+      canvas.off("object:modified", handleObjectModified);
+      canvas.off("object:removed", handleCanvasChange);
+      canvas.off("path:created", handleCanvasChange);
+      canvas.off("text:changed", handleCanvasChange);
+    };
+  }, [fabricCanvasRef, onHistoryStateChange]);
+
+  /*
+   * ============================================================
+   * UNDO / REDO RESTORE
+   * ============================================================
+   */
+
+  useEffect(() => {
+    if (historyRequest.id === 0) {
+      return;
+    }
+
+    if (historyRequest.id === lastHistoryRequestRef.current) {
+      return;
+    }
+
+    lastHistoryRequestRef.current = historyRequest.id;
+
+    const canvas = fabricCanvasRef.current;
+
+    if (!canvas) {
+      return;
+    }
+
+    const restoreSnapshot = async () => {
+      isRestoringHistoryRef.current = true;
+
+      try {
+        const payload = JSON.parse(historyRequest.snapshot);
+
+        await canvas.loadFromJSON(payload.canvas);
+
+        const objects = canvas.getObjects();
+
+        const restoredImage = objects.find(
+          (object: any) => object.type === "image",
+        ) as FabricImage | undefined;
+
+        const restoredCrop = objects.find(
+          (object: any) => object.get("annotationType") === "crop",
+        ) as Rect | undefined;
+
+        imageRef.current = restoredImage || null;
+        cropRectRef.current = restoredCrop || null;
+
+        rotationRef.current = Number(payload.rotation) || 0;
+
+        baseImageScaleRef.current = Number(payload.baseImageScale) || 1;
+
+        if (restoredImage) {
+          restoredImage.set({
+            selectable: false,
+            evented: false,
+          });
+
+          canvas.sendObjectToBack(restoredImage);
+        }
+
+        objects.forEach((object: any) => {
+          if (object === restoredImage) {
+            return;
+          }
+
+          if (object === restoredCrop) {
+            object.set({
+              selectable: activeTool === "crop",
+              evented: activeTool === "crop",
+            });
+            return;
+          }
+
+          if (isAnnotation(object)) {
+            object.set({
+              selectable: activeTool === "select",
+              evented: activeTool === "select",
+            });
+          }
+
+          object.setCoords();
+        });
+
+        canvas.discardActiveObject();
+        canvas.requestRenderAll();
+
+        onAnnotationSelected(null);
+
+        if (restoredImage) {
+          onImageRotated(
+            rotationRef.current,
+            restoredImage.scaleX || 1,
+            restoredImage.scaleY || 1,
+          );
+        }
+      } catch (error) {
+        console.error("Failed to restore history state:", error);
+      } finally {
+        isRestoringHistoryRef.current = false;
+      }
+    };
+
+    void restoreSnapshot();
+  }, [
+    historyRequest,
+    activeTool,
+    fabricCanvasRef,
+    onAnnotationSelected,
+    onImageRotated,
   ]);
 
   /*
@@ -945,6 +1178,8 @@ const CanvasEditor = ({
         onAnnotationSelected(null);
 
         canvas.requestRenderAll();
+
+        emitHistoryState();
       }
     };
 
@@ -1000,6 +1235,7 @@ const CanvasEditor = ({
       });
 
       canvas.requestRenderAll();
+      emitHistoryState();
     };
 
     canvas.on("path:created", handlePathCreated);
@@ -1160,6 +1396,7 @@ const CanvasEditor = ({
         });
 
         canvas.requestRenderAll();
+        emitHistoryState();
       }
     };
 
@@ -1231,6 +1468,7 @@ const CanvasEditor = ({
       textObject.selectAll();
 
       canvas.requestRenderAll();
+      emitHistoryState();
     };
 
     canvas.on("mouse:down", handleMouseDown);
@@ -1573,6 +1811,7 @@ const CanvasEditor = ({
       }
 
       isApplyingCropRef.current = true;
+      isApplyingOperationRef.current = true;
 
       /*
        * Save the objects before changing the canvas.
@@ -1818,6 +2057,11 @@ const CanvasEditor = ({
         console.error("Failed to crop image:", error);
       } finally {
         isApplyingCropRef.current = false;
+        isApplyingOperationRef.current = false;
+
+        if (!isApplyingCropRef.current) {
+          emitHistoryState();
+        }
       }
     };
 
