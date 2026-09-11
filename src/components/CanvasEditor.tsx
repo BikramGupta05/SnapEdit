@@ -3,6 +3,12 @@ import { Circle, FabricImage, IText, PencilBrush, Point, Rect } from "fabric";
 
 import { useFabricCanvas } from "../hooks/useFabricCanvas";
 
+import { buildEditorExportData } from "../utils/exportEditorData";
+import {
+  buildHistorySnapshot,
+  restoreHistorySnapshot,
+} from "../utils/editorHistory";
+
 import type {
   EditorTool,
   ImageMetadata,
@@ -39,6 +45,8 @@ interface CanvasEditorProps {
   onCropModeChange: (cropping: boolean) => void;
 
   onAnnotationSelected: (annotation: SelectedAnnotation | null) => void;
+
+  onTextValueChange: (value: string) => void;
 
   onLoadingChange: (loading: boolean, message?: string) => void;
 
@@ -78,6 +86,7 @@ const CanvasEditor = ({
   onCropApplied,
   onCropModeChange,
   onAnnotationSelected,
+  onTextValueChange,
   onLoadingChange,
   onError,
 
@@ -116,13 +125,12 @@ const CanvasEditor = ({
 
   const isApplyingOperationRef = useRef(false);
 
-  const historyTimerRef = useRef<number | null>(null);
-
   const lastHistoryRequestRef = useRef(0);
-
   const zoomPointRef = useRef(new Point(canvasWidth / 2, canvasHeight / 2));
 
-  const emitHistoryState = (force = false) => {
+  const historyTimerRef = useRef<number | null>(null);
+
+  const scheduleHistoryState = (force = false) => {
     const canvas = fabricCanvasRef.current;
 
     if (
@@ -147,13 +155,13 @@ const CanvasEditor = ({
         return;
       }
 
-      const snapshot = JSON.stringify({
-        canvas: canvas.toObject(["annotationType", "isTemporaryShape"]),
-        rotation: rotationRef.current,
-        baseImageScale: baseImageScaleRef.current,
-      });
-
-      onHistoryStateChange(snapshot);
+      onHistoryStateChange(
+        buildHistorySnapshot(
+          canvas,
+          rotationRef.current,
+          baseImageScaleRef.current,
+        ),
+      );
     }, 120);
   };
 
@@ -380,7 +388,7 @@ const CanvasEditor = ({
           scaleY: scale,
         });
 
-        emitHistoryState();
+        scheduleHistoryState();
       } catch (error) {
         console.error("Failed to load image:", error);
         onError(
@@ -689,7 +697,7 @@ const CanvasEditor = ({
     onImageRotated(nextRotation, targetScale, targetScale);
 
     isApplyingOperationRef.current = false;
-    emitHistoryState();
+    scheduleHistoryState();
   }, [
     rotationRequest,
     canvasWidth,
@@ -1065,7 +1073,7 @@ const CanvasEditor = ({
 
       canvas.requestRenderAll();
 
-      emitHistoryState();
+      scheduleHistoryState();
 
       return;
     }
@@ -1089,7 +1097,7 @@ const CanvasEditor = ({
 
       canvas.requestRenderAll();
 
-      emitHistoryState();
+      scheduleHistoryState();
     }
   }, [
     activeTool,
@@ -1132,7 +1140,7 @@ const CanvasEditor = ({
         return;
       }
 
-      emitHistoryState();
+      scheduleHistoryState();
     };
 
     const handleCanvasChange = () => {
@@ -1140,7 +1148,7 @@ const CanvasEditor = ({
         return;
       }
 
-      emitHistoryState();
+      scheduleHistoryState();
     };
 
     canvas.on("object:modified", handleObjectModified);
@@ -1183,71 +1191,21 @@ const CanvasEditor = ({
       isRestoringHistoryRef.current = true;
 
       try {
-        const payload = JSON.parse(historyRequest.snapshot);
+        const restored = await restoreHistorySnapshot(
+          canvas,
+          historyRequest.snapshot,
+          {
+            activeTool,
+            isAnnotation,
+            onAnnotationSelected,
+            onImageRotated,
+          },
+        );
 
-        await canvas.loadFromJSON(payload.canvas);
-
-        const objects = canvas.getObjects();
-
-        const restoredImage = objects.find(
-          (object: any) => object.type === "image",
-        ) as FabricImage | undefined;
-
-        const restoredCrop = objects.find(
-          (object: any) => object.get("annotationType") === "crop",
-        ) as Rect | undefined;
-
-        imageRef.current = restoredImage || null;
-        cropRectRef.current = restoredCrop || null;
-
-        rotationRef.current = Number(payload.rotation) || 0;
-
-        baseImageScaleRef.current = Number(payload.baseImageScale) || 1;
-
-        if (restoredImage) {
-          restoredImage.set({
-            selectable: false,
-            evented: false,
-          });
-
-          canvas.sendObjectToBack(restoredImage);
-        }
-
-        objects.forEach((object: any) => {
-          if (object === restoredImage) {
-            return;
-          }
-
-          if (object === restoredCrop) {
-            object.set({
-              selectable: activeTool === "crop",
-              evented: activeTool === "crop",
-            });
-            return;
-          }
-
-          if (isAnnotation(object)) {
-            object.set({
-              selectable: activeTool === "select",
-              evented: activeTool === "select",
-            });
-          }
-
-          object.setCoords();
-        });
-
-        canvas.discardActiveObject();
-        canvas.requestRenderAll();
-
-        onAnnotationSelected(null);
-
-        if (restoredImage) {
-          onImageRotated(
-            rotationRef.current,
-            restoredImage.scaleX || 1,
-            restoredImage.scaleY || 1,
-          );
-        }
+        imageRef.current = restored.image;
+        cropRectRef.current = restored.crop;
+        rotationRef.current = restored.rotation;
+        baseImageScaleRef.current = restored.baseImageScale;
       } catch (error) {
         console.error("Failed to restore history state:", error);
       } finally {
@@ -1324,7 +1282,7 @@ const CanvasEditor = ({
 
         canvas.requestRenderAll();
 
-        emitHistoryState();
+        scheduleHistoryState();
       }
     };
 
@@ -1380,7 +1338,7 @@ const CanvasEditor = ({
       });
 
       canvas.requestRenderAll();
-      emitHistoryState();
+      scheduleHistoryState();
     };
 
     canvas.on("path:created", handlePathCreated);
@@ -1541,7 +1499,7 @@ const CanvasEditor = ({
         });
 
         canvas.requestRenderAll();
-        emitHistoryState();
+        scheduleHistoryState();
       }
     };
 
@@ -1578,9 +1536,12 @@ const CanvasEditor = ({
     const handleMouseDown = (event: any) => {
       const pointer = canvas.getScenePoint(event.e);
 
-      const text = textValueRef.current.trim();
+      // Every new text annotation must start completely empty.
+      // Do not reuse the toolbar value from the previous annotation.
+      textValueRef.current = "";
+      onTextValueChange("");
 
-      const textObject = new IText(text || "Type here", {
+      const textObject = new IText("", {
         originX: "left",
 
         originY: "top",
@@ -1613,7 +1574,7 @@ const CanvasEditor = ({
       textObject.selectAll();
 
       canvas.requestRenderAll();
-      emitHistoryState();
+      scheduleHistoryState();
     };
 
     canvas.on("mouse:down", handleMouseDown);
@@ -1621,7 +1582,13 @@ const CanvasEditor = ({
     return () => {
       canvas.off("mouse:down", handleMouseDown);
     };
-  }, [activeTool, brushColor, textFontSize, fabricCanvasRef]);
+  }, [
+    activeTool,
+    brushColor,
+    textFontSize,
+    fabricCanvasRef,
+    onTextValueChange,
+  ]);
 
   /*
    * ============================================================
@@ -2245,7 +2212,7 @@ const CanvasEditor = ({
         onLoadingChange(false);
 
         if (!isApplyingCropRef.current) {
-          emitHistoryState();
+          scheduleHistoryState();
         }
       }
     };
@@ -2319,61 +2286,14 @@ const CanvasEditor = ({
           return;
         }
 
-        const allAnnotations = canvas
-          .getObjects()
-          .filter((object: any) => isAnnotation(object));
-
-        const annotationData = allAnnotations.map((object: any) =>
-          object.toObject(["annotationType", "isTemporaryShape"]),
-        );
-
-        const drawingData = allAnnotations
-          .filter((object: any) => object.get("annotationType") === "drawing")
-          .map((object: any) =>
-            object.toObject(["annotationType", "isTemporaryShape"]),
-          );
-
-        const shapeData = allAnnotations
-          .filter((object: any) => {
-            const type = object.get("annotationType");
-            return type === "rectangle" || type === "circle";
-          })
-          .map((object: any) =>
-            object.toObject(["annotationType", "isTemporaryShape"]),
-          );
-
-        const textData = allAnnotations
-          .filter((object: any) => object.get("annotationType") === "text")
-          .map((object: any) =>
-            object.toObject(["annotationType", "isTemporaryShape"]),
-          );
-
-        const exportData = {
-          editorVersion: 1,
-          exportedAt: new Date().toISOString(),
-          sourceImage: imageFile
-            ? {
-                name: imageFile.name,
-                type: imageFile.type,
-                size: imageFile.size,
-              }
-            : null,
-          imageMetadata: imageRef.current
-            ? {
-                originalWidth: imageRef.current.get("width") || 0,
-                originalHeight: imageRef.current.get("height") || 0,
-                rotation: rotationRef.current,
-                scaleX: imageRef.current.scaleX || 1,
-                scaleY: imageRef.current.scaleY || 1,
-                canvasWidth,
-                canvasHeight,
-              }
-            : null,
-          annotations: annotationData,
-          drawingData,
-          shapeData,
-          textData,
-        };
+        const exportData = buildEditorExportData({
+          canvas,
+          imageFile,
+          image: imageRef.current,
+          rotation: rotationRef.current,
+          canvasWidth,
+          canvasHeight,
+        });
 
         const blob = new Blob([JSON.stringify(exportData, null, 2)], {
           type: "application/json",
@@ -2411,7 +2331,6 @@ const CanvasEditor = ({
         canvas.requestRenderAll();
       }
     };
-
     exportCanvas();
   }, [
     exportRequest,

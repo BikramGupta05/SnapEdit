@@ -1,391 +1,91 @@
-import { useCallback, useState } from "react";
-
 import CanvasEditor from "./components/CanvasEditor";
 import Toolbar from "./components/Toolbar";
 
-import type {
-  AnnotationType,
-  EditorState,
-  EditorTool,
-  ImageMetadata,
-  SelectedAnnotation,
-} from "./types/editor";
+import { useEditor } from "./hooks/useEditor";
 
 import "./App.css";
 
-interface HistoryRequest {
-  id: number;
-  direction: "undo" | "redo";
-  snapshot: string;
-}
-
-interface ExportRequest {
-  id: number;
-  type: "image" | "json";
-}
-
-interface ZoomRequest {
-  id: number;
-  action: "in" | "out" | "reset";
-}
-
 function App() {
-  const [activeTool, setActiveTool] = useState<EditorTool>("select");
-  const [imageFile, setImageFile] = useState<File | null>(null);
-
-  const [brushColor, setBrushColor] = useState("#111827");
-  const [brushWidth, setBrushWidth] = useState(4);
-  const [textFontSize, setTextFontSize] = useState(28);
-  const [textValue, setTextValue] = useState("");
-
-  const [selectedAnnotation, setSelectedAnnotation] =
-    useState<SelectedAnnotation | null>(null);
-
-  const [editorState, setEditorState] = useState<EditorState>({
-    tool: "select",
-    image: null,
-  });
-
-  const [isCropping, setIsCropping] = useState(false);
-
-  const [rotationRequest, setRotationRequest] = useState({
-    id: 0,
-    direction: "right" as "left" | "right",
-  });
-
-  const [historyRequest, setHistoryRequest] = useState<HistoryRequest>({
-    id: 0,
-    direction: "undo",
-    snapshot: "",
-  });
-
-  const [historyPast, setHistoryPast] = useState<string[]>([]);
-  const [historyFuture, setHistoryFuture] = useState<string[]>([]);
-
-  const [exportRequest, setExportRequest] = useState<ExportRequest>({
-    id: 0,
-    type: "image",
-  });
-
-  const [zoomRequest, setZoomRequest] = useState<ZoomRequest>({
-    id: 0,
-    action: "reset",
-  });
-
-  const [isBusy, setIsBusy] = useState(false);
-  const [busyMessage, setBusyMessage] = useState("");
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  const handleImageUpload = (file: File) => {
-    setErrorMessage(null);
-    setBusyMessage("Loading image…");
-    setIsBusy(true);
-    setImageFile(file);
-    setActiveTool("select");
-    setIsCropping(false);
-    setSelectedAnnotation(null);
-    setTextValue("");
-    setRotationRequest({ id: 0, direction: "right" });
-
-    setEditorState({
-      tool: "select",
-      image: null,
-    });
-
-    setHistoryPast([]);
-    setHistoryFuture([]);
-    setHistoryRequest({
-      id: 0,
-      direction: "undo",
-      snapshot: "",
-    });
-    setExportRequest({
-      id: 0,
-      type: "image",
-    });
-    setZoomRequest({
-      id: 0,
-      action: "reset",
-    });
-  };
-
-  const handleImageLoaded = useCallback((metadata: ImageMetadata) => {
-    setIsBusy(false);
-    setBusyMessage("");
-    setErrorMessage(null);
-    setEditorState((currentState) => ({
-      ...currentState,
-      image: metadata,
-    }));
-    setSelectedAnnotation(null);
-  }, []);
-
-  const handleEditorLoadingChange = useCallback(
-    (loading: boolean, message = "") => {
-      setIsBusy(loading);
-      setBusyMessage(message);
-    },
-    [],
-  );
-
-  const handleEditorError = useCallback((message: string) => {
-    setIsBusy(false);
-    setBusyMessage("");
-    setErrorMessage(message);
-  }, []);
-
-  const handleRotate = (direction: "left" | "right") => {
-    if (!imageFile || isCropping || isBusy) {
-      return;
-    }
-
-    setRotationRequest((currentRequest) => ({
-      id: currentRequest.id + 1,
-      direction,
-    }));
-  };
-
-  const handleImageRotated = useCallback(
-    (rotation: number, scaleX: number, scaleY: number) => {
-      setEditorState((currentState) => {
-        if (!currentState.image) {
-          return currentState;
-        }
-
-        return {
-          ...currentState,
-          image: {
-            ...currentState.image,
-            rotation,
-            scaleX,
-            scaleY,
-          },
-        };
-      });
-    },
-    [],
-  );
-
-  const handleCropApplied = useCallback((metadata: ImageMetadata) => {
-    setEditorState((currentState) => ({
-      ...currentState,
-      image: metadata,
-      tool: "select",
-    }));
-    setActiveTool("select");
-    setIsCropping(false);
-  }, []);
-
-  const handleCropModeChange = useCallback((cropping: boolean) => {
-    setIsCropping(cropping);
-    if (cropping) {
-      setSelectedAnnotation(null);
-    }
-  }, []);
-
-  const handleToolChange = (tool: EditorTool) => {
-    setActiveTool(tool);
-
-    if (tool !== "select") {
-      setSelectedAnnotation(null);
-    }
-
-    setEditorState((currentState) => ({
-      ...currentState,
-      tool,
-    }));
-  };
-
-  const handleAnnotationSelected = useCallback(
-    (annotation: SelectedAnnotation | null) => {
-      setSelectedAnnotation(annotation);
-
-      if (!annotation) {
-        return;
-      }
-
-      setBrushColor(annotation.color);
-      setBrushWidth(annotation.width);
-      setTextFontSize(annotation.fontSize);
-      setTextValue(annotation.text);
-    },
-    [],
-  );
-
-  const handleHistoryStateChange = useCallback((snapshot: string) => {
-    setHistoryPast((currentPast) => {
-      if (currentPast[currentPast.length - 1] === snapshot) {
-        return currentPast;
-      }
-
-      if (currentPast.length === 0) {
-        return [snapshot];
-      }
-
-      return [...currentPast, snapshot];
-    });
-
-    setHistoryFuture([]);
-  }, []);
-
-  const handleUndo = () => {
-    if (historyPast.length <= 1) {
-      return;
-    }
-
-    const currentSnapshot = historyPast[historyPast.length - 1];
-    const targetSnapshot = historyPast[historyPast.length - 2];
-
-    setHistoryPast((currentPast) => currentPast.slice(0, -1));
-    setHistoryFuture((currentFuture) => [currentSnapshot, ...currentFuture]);
-
-    setHistoryRequest((currentRequest) => ({
-      id: currentRequest.id + 1,
-      direction: "undo",
-      snapshot: targetSnapshot,
-    }));
-  };
-
-  const handleRedo = () => {
-    if (historyFuture.length === 0) {
-      return;
-    }
-
-    const targetSnapshot = historyFuture[0];
-    const currentSnapshot = historyPast[historyPast.length - 1];
-
-    setHistoryPast((currentPast) => [...currentPast, targetSnapshot]);
-    setHistoryFuture((currentFuture) => currentFuture.slice(1));
-
-    setHistoryRequest((currentRequest) => ({
-      id: currentRequest.id + 1,
-      direction: "redo",
-      snapshot: targetSnapshot,
-    }));
-
-    void currentSnapshot;
-  };
-
-  const handleExport = (type: "image" | "json") => {
-    if (!imageFile || isBusy) {
-      return;
-    }
-
-    setErrorMessage(null);
-    setExportRequest((currentRequest) => ({
-      id: currentRequest.id + 1,
-      type,
-    }));
-  };
-
-  const handleClearCanvas = () => {
-    setImageFile(null);
-    setIsCropping(false);
-    setActiveTool("select");
-    setSelectedAnnotation(null);
-    setTextValue("");
-    setRotationRequest({ id: 0, direction: "right" });
-    setEditorState({ tool: "select", image: null });
-    setHistoryPast([]);
-    setHistoryFuture([]);
-    setHistoryRequest({
-      id: 0,
-      direction: "undo",
-      snapshot: "",
-    });
-    setExportRequest({
-      id: 0,
-      type: "image",
-    });
-    setZoomRequest((currentRequest) => ({
-      id: currentRequest.id + 1,
-      action: "reset",
-    }));
-  };
-
-  const handleZoom = (action: ZoomRequest["action"]) => {
-    if (!imageFile || isBusy) {
-      return;
-    }
-
-    setZoomRequest((currentRequest) => ({
-      id: currentRequest.id + 1,
-      action,
-    }));
-  };
-
-  const selectedType: AnnotationType | null = selectedAnnotation?.type ?? null;
-
-  const canUndo = Boolean(imageFile) && historyPast.length > 1;
-  const canRedo = Boolean(imageFile) && historyFuture.length > 0;
+  const editor = useEditor();
 
   return (
     <div className="app">
-      <style>{`@keyframes image-editor-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      <style>
+        {`@keyframes image-editor-spin {
+          from {
+            transform: rotate(0deg);
+          }
+          to {
+            transform: rotate(360deg);
+          }
+        }`}
+      </style>
+
       <header className="app-header">
         <div>
           <h1>Image Editor</h1>
           <p>Edit images, add annotations, and export your work.</p>
         </div>
 
-        {imageFile && (
+        {editor.imageFile && (
           <div className="image-status">
             <span className="status-dot" />
-            <span>{imageFile.name}</span>
+            <span>{editor.imageFile.name}</span>
           </div>
         )}
       </header>
 
       <main className="editor-layout">
         <Toolbar
-          activeTool={activeTool}
-          onToolChange={handleToolChange}
-          onImageUpload={handleImageUpload}
-          onClear={handleClearCanvas}
-          onRotate={handleRotate}
-          hasImage={Boolean(imageFile)}
-          brushColor={brushColor}
-          brushWidth={brushWidth}
-          textFontSize={textFontSize}
-          textValue={textValue}
-          selectedAnnotationType={selectedType}
-          onBrushColorChange={setBrushColor}
-          onBrushWidthChange={setBrushWidth}
-          onTextFontSizeChange={setTextFontSize}
-          onTextValueChange={setTextValue}
-          onUndo={handleUndo}
-          onRedo={handleRedo}
-          canUndo={canUndo}
-          canRedo={canRedo}
-          onExport={handleExport}
-          onZoom={handleZoom}
-          isBusy={isBusy}
-          onError={handleEditorError}
+          activeTool={editor.activeTool}
+          onToolChange={editor.handleToolChange}
+          onImageUpload={editor.handleImageUpload}
+          onClear={editor.handleClearCanvas}
+          onRotate={editor.handleRotate}
+          hasImage={Boolean(editor.imageFile)}
+          brushColor={editor.brushColor}
+          brushWidth={editor.brushWidth}
+          textFontSize={editor.textFontSize}
+          textValue={editor.textValue}
+          selectedAnnotationType={editor.selectedType}
+          onBrushColorChange={editor.setBrushColor}
+          onBrushWidthChange={editor.setBrushWidth}
+          onTextFontSizeChange={editor.setTextFontSize}
+          onTextValueChange={editor.setTextValue}
+          onUndo={editor.handleUndo}
+          onRedo={editor.handleRedo}
+          canUndo={editor.canUndo}
+          canRedo={editor.canRedo}
+          onExport={editor.handleExport}
+          onZoom={editor.handleZoom}
+          isBusy={editor.isBusy}
+          onError={editor.handleEditorError}
         />
 
         <section className="workspace">
           <CanvasEditor
-            imageFile={imageFile}
-            activeTool={activeTool}
-            brushColor={brushColor}
-            brushWidth={brushWidth}
-            textFontSize={textFontSize}
-            textValue={textValue}
-            rotationRequest={rotationRequest}
-            zoomRequest={zoomRequest}
-            historyRequest={historyRequest}
-            onHistoryStateChange={handleHistoryStateChange}
-            exportRequest={exportRequest}
-            onImageLoaded={handleImageLoaded}
-            onImageRotated={handleImageRotated}
-            onCropApplied={handleCropApplied}
-            onCropModeChange={handleCropModeChange}
-            onAnnotationSelected={handleAnnotationSelected}
-            onLoadingChange={handleEditorLoadingChange}
-            onError={handleEditorError}
+            imageFile={editor.imageFile}
+            activeTool={editor.activeTool}
+            brushColor={editor.brushColor}
+            brushWidth={editor.brushWidth}
+            textFontSize={editor.textFontSize}
+            textValue={editor.textValue}
+            rotationRequest={editor.rotationRequest}
+            zoomRequest={editor.zoomRequest}
+            historyRequest={editor.historyRequest}
+            onHistoryStateChange={editor.handleHistoryStateChange}
+            exportRequest={editor.exportRequest}
+            onImageLoaded={editor.handleImageLoaded}
+            onImageRotated={editor.handleImageRotated}
+            onCropApplied={editor.handleCropApplied}
+            onCropModeChange={editor.handleCropModeChange}
+            onAnnotationSelected={editor.handleAnnotationSelected}
+            onTextValueChange={editor.setTextValue}
+            onLoadingChange={editor.handleEditorLoadingChange}
+            onError={editor.handleEditorError}
           />
 
-          {!imageFile && (
+          {!editor.imageFile && (
             <div className="empty-state">
               <div className="empty-state-content">
                 <h2>Start editing an image</h2>
@@ -394,93 +94,46 @@ function App() {
             </div>
           )}
 
-          {errorMessage && (
-            <div
-              className="editor-error"
-              role="alert"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: "12px",
-                padding: "12px 14px",
-                margin: "12px 0",
-                border: "1px solid #fecaca",
-                borderRadius: "10px",
-                background: "#fef2f2",
-                color: "#991b1b",
-              }}
-            >
-              <div
-                style={{ display: "flex", flexDirection: "column", gap: "2px" }}
-              >
+          {editor.errorMessage && (
+            <div className="editor-error" role="alert">
+              <div>
                 <strong>Something went wrong</strong>
-                <span>{errorMessage}</span>
+                <span>{editor.errorMessage}</span>
               </div>
+
               <button
                 type="button"
-                onClick={() => setErrorMessage(null)}
+                onClick={() => editor.setErrorMessage(null)}
                 aria-label="Dismiss error"
-                style={{
-                  border: 0,
-                  background: "transparent",
-                  fontSize: "22px",
-                  cursor: "pointer",
-                  color: "inherit",
-                }}
               >
                 ×
               </button>
             </div>
           )}
 
-          {isBusy && (
-            <div
-              className="editor-loading"
-              role="status"
-              aria-live="polite"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: "10px",
-                padding: "14px",
-                margin: "12px 0",
-                border: "1px solid #e5e7eb",
-                borderRadius: "10px",
-                background: "#ffffff",
-                color: "#374151",
-              }}
-            >
-              <div
-                className="loading-spinner"
-                style={{
-                  width: "18px",
-                  height: "18px",
-                  border: "3px solid #e5e7eb",
-                  borderTopColor: "#111827",
-                  borderRadius: "50%",
-                  animation: "image-editor-spin 0.8s linear infinite",
-                }}
-              />
-              <span>{busyMessage || "Working…"}</span>
+          {editor.isBusy && (
+            <div className="editor-loading" role="status" aria-live="polite">
+              <div className="loading-spinner" />
+              <span>{editor.busyMessage || "Working…"}</span>
             </div>
           )}
 
-          {editorState.image && (
+          {editor.editorState.image && (
             <div className="image-info">
               <span>
-                {editorState.image.originalWidth} ×{" "}
-                {editorState.image.originalHeight} px
+                {editor.editorState.image.originalWidth} ×{" "}
+                {editor.editorState.image.originalHeight} px
               </span>
 
-              {editorState.image.rotation !== 0 && (
+              {editor.editorState.image.rotation !== 0 && (
                 <span className="rotation-status">
-                  Rotation: {editorState.image.rotation}°
+                  Rotation: {editor.editorState.image.rotation}°
                 </span>
               )}
 
-              {isCropping && <span className="crop-status">Crop mode</span>}
+              {editor.isCropping && (
+                <span className="crop-status">Crop mode</span>
+              )}
             </div>
           )}
         </section>
