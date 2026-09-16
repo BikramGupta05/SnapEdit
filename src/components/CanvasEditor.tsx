@@ -2270,10 +2270,64 @@ const CanvasEditor = ({
         canvas.requestRenderAll();
 
         if (exportRequest.type === "image") {
+          const imageObject = imageRef.current;
+
+          if (!imageObject) {
+            throw new Error("No image is available for export.");
+          }
+
+          /*
+           * Export only the actual image area instead of the full
+           * 900 x 600 editor canvas.
+           *
+           * Fabric's viewport transform is used for zooming, so we
+           * temporarily reset it while calculating/exporting the
+           * image bounds. This makes export independent of the
+           * current zoom level. The exact viewport transform is
+           * restored immediately afterwards.
+           */
+          const previousViewportTransform = canvas.viewportTransform;
+
+          canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+
+          const imageBounds = imageObject.getBoundingRect();
+
+          const exportLeft = Math.max(0, Math.floor(imageBounds.left));
+          const exportTop = Math.max(0, Math.floor(imageBounds.top));
+          const exportRight = Math.min(
+            canvasWidth,
+            Math.ceil(imageBounds.left + imageBounds.width),
+          );
+          const exportBottom = Math.min(
+            canvasHeight,
+            Math.ceil(imageBounds.top + imageBounds.height),
+          );
+
+          const exportWidth = exportRight - exportLeft;
+          const exportHeight = exportBottom - exportTop;
+
+          if (exportWidth <= 0 || exportHeight <= 0) {
+            if (previousViewportTransform) {
+              canvas.setViewportTransform(previousViewportTransform);
+            }
+            throw new Error("The image area is invalid for export.");
+          }
+
+          canvas.requestRenderAll();
+
           const dataUrl = canvas.toDataURL({
             format: "png",
+            left: exportLeft,
+            top: exportTop,
+            width: exportWidth,
+            height: exportHeight,
             multiplier: 1,
           });
+
+          if (previousViewportTransform) {
+            canvas.setViewportTransform(previousViewportTransform);
+          }
+          canvas.requestRenderAll();
 
           const link = document.createElement("a");
           const baseName = imageFile?.name
